@@ -3,6 +3,7 @@ name: Build openRPGator
 on:
   push:
     branches: ['**']
+    tags: ['v*']
   pull_request:
   workflow_dispatch:
 
@@ -68,7 +69,7 @@ jobs:
       - name: Upload Linux artifact
         uses: actions/upload-artifact@v4
         with:
-          name: openRPGator-linux-${{ matrix.arch }}
+          name: openRPGator-linux-${{ matrix.arch }}-${{ github.ref_name }}
           path: openRPGator-linux-${{ matrix.arch }}.tar.gz
           if-no-files-found: error
 
@@ -106,6 +107,6 @@ jobs:
       - name: Upload Android APK
         uses: actions/upload-artifact@v4
         with:
-          name: openRPGator-android-universal
+          name: openRPGator-android-universal-${{ github.ref_name }}
           path: dist/openRPGator-android-universal.apk
           if-no-files-found: error
