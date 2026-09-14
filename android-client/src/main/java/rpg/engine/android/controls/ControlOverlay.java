@@ -14,6 +14,7 @@ public final class ControlOverlay extends View {
     public void setEditMode(boolean v){editMode=v;invalidate();}
     public boolean isEditMode(){return editMode;}
     public ControlBinding selected(){return selected;}
+    public void select(ControlBinding binding){selected=binding;invalidate();}
     private float px(float v){return v*getWidth();} private float py(float v){return v*getHeight();}
     @Override protected void onDraw(Canvas c){super.onDraw(c);for(ControlBinding b:layout.bindings()){
         float cx=px(b.x),cy=py(b.y),r=b.size*Math.min(getWidth(),getHeight())*.5f;

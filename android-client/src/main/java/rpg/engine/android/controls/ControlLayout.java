@@ -24,6 +24,36 @@ public final class ControlLayout {
     }
     private void add(String id,ControlAction a,ControlType t,float x,float y,float s,String label){bindings.add(new ControlBinding(id,a,t,x,y,s,label));}
 
+    public void cycleAction(ControlBinding binding){
+        if(binding==null || !bindings.contains(binding)) return;
+        ControlAction[] actions=ControlAction.values();
+        int index=0;
+        for(int i=0;i<actions.length;i++){
+            if(actions[i]==binding.action){ index=i; break; }
+        }
+        binding.action=actions[(index+1)%actions.length];
+    }
+
+    public ControlBinding addCustom(ControlAction action,ControlType type,float x,float y,float size,String label){
+        String id="custom-"+(bindings.size()+1);
+        int suffix=bindings.size()+1;
+        while(containsId(id)) id="custom-"+(++suffix);
+        ControlBinding binding=new ControlBinding(id,action,type,clamp(x),clamp(y),clamp(size),label);
+        bindings.add(binding);
+        return binding;
+    }
+
+    public void remove(ControlBinding binding){
+        if(binding!=null) bindings.remove(binding);
+    }
+
+    private boolean containsId(String id){
+        for(ControlBinding b:bindings) if(b.id.equals(id)) return true;
+        return false;
+    }
+
+    private static float clamp(float value){ return Math.max(0f,Math.min(1f,value)); }
+
     public void save(Context c){
         StringBuilder b=new StringBuilder();
         for(ControlBinding v:bindings){

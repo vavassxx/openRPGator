@@ -48,7 +48,7 @@ public final class MainActivity extends Activity implements ClientSession.Listen
         type.setOnClickListener(v->{overlay.cycleType();});
         smaller.setOnClickListener(v->{if(overlay.selected()!=null){overlay.selected().size=Math.max(.05f,overlay.selected().size-.02f);overlay.invalidate();}});
         larger.setOnClickListener(v->{if(overlay.selected()!=null){overlay.selected().size=Math.min(.35f,overlay.selected().size+.02f);overlay.invalidate();}});
-        add.setOnClickListener(v->{overlay.setEditMode(true);editing=true;ControlBinding b=controls.addCustom(ControlAction.PRIMARY,ControlType.BUTTON,.5f,.5f,.12f,"A");overlay.invalidate();status.setText("New control selected; drag it");});
+        add.setOnClickListener(v->{overlay.setEditMode(true);editing=true;ControlBinding b=controls.addCustom(ControlAction.PRIMARY,ControlType.BUTTON,.5f,.5f,.12f,"A");overlay.select(b);status.setText("New control selected; drag it");});
         remove.setOnClickListener(v->{if(overlay.selected()!=null){controls.remove(overlay.selected());overlay.invalidate();}});
         setContentView(root);
     }
