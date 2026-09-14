@@ -1,18 +1,14 @@
-plugins {
-    id 'java' apply false
-    id 'application' apply false
-}
-
 allprojects {
     group = 'rpg.engine'
-    version = '0.2.0'
+    version = '0.3.0'
     repositories { mavenCentral() }
 }
 
 subprojects {
     if (project.name != 'android-client') {
         apply plugin: 'java-library'
-        java { toolchain { languageVersion = JavaLanguageVersion.of(21) } }
+        def jvmLevel = project.hasProperty('androidBuild') ? 17 : 21
+        java { toolchain { languageVersion = JavaLanguageVersion.of(jvmLevel) } }
         tasks.withType(JavaCompile).configureEach { options.encoding = 'UTF-8' }
         dependencies { testImplementation 'org.junit.jupiter:junit-jupiter:5.11.0' }
         tasks.withType(Test).configureEach { useJUnitPlatform() }

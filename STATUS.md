@@ -1,4 +1,4 @@
-# Implementation status — 0.1.0
+# Implementation status — 0.2.0
 
 This repository is a real, buildable foundation/vertical slice, not a collection of placeholder classes.
 
@@ -37,3 +37,14 @@ The architecture deliberately keeps these as subsequent layers rather than fakin
 - Pan the map by dragging; tile palette 0..9.
 - `RMapIO` now supports `InputStream`/`OutputStream`, so Android does not need filesystem paths.
 - The Android app does not depend on LWJGL or the desktop renderer.
+
+
+## CI packaging
+- GitHub Actions workflow builds Linux x86_64 and ARM64 distributions for the dedicated server, Swing map editor and desktop client.
+- Desktop client distributions resolve architecture-specific LWJGL native artifacts.
+- Android map editor is assembled as a universal APK.
+- Android CI compiles the shared JVM libraries at Java 17 bytecode level while the full desktop/server build remains Java 21.
+
+## Android client input system
+
+The Android client now uses a semantic, user-editable control layer. Gameplay receives logical actions (`MOVE_*`, `PRIMARY`, `SECONDARY`, `INTERACT`, `INVENTORY`) rather than hard-coded screen coordinates. Control widgets can be moved, resized, remapped to another action, toggled between button and joystick presentation, added, deleted, and persisted locally. Network `Input` packets carry both movement and an action bitmask so the server protocol is no longer tied to a particular touch layout.
