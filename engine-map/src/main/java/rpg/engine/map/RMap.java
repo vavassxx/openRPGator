@@ -1,0 +1,1 @@
+package rpg.engine.map; import java.util.*; public record RMap(String name,int tileSize,int width,int height,List<TileLayer> layers,List<MapEntity> entities){public RMap{layers=List.copyOf(layers);entities=List.copyOf(entities);}}

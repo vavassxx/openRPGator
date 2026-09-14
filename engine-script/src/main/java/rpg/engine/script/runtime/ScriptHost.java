@@ -1,0 +1,2 @@
+package rpg.engine.script.runtime; import java.util.*;
+public final class ScriptHost {private final Map<String,ScriptFunction> f=new HashMap<>();private final Map<String,Object> globals=new HashMap<>();public void function(String n,ScriptFunction x){f.put(n,x);}public Object global(String n){return globals.get(n);}public void global(String n,Object v){globals.put(n,v);}public Object call(String n,List<Object>a){var x=f.get(n);if(x==null)throw new IllegalArgumentException("unknown function: "+n);return x.call(a);} }

@@ -1,0 +1,1 @@
+package rpg.engine.core.component; import java.util.*; import rpg.engine.core.math.Vec2; public record PolygonCollider(List<Vec2> vertices) implements Collider { public PolygonCollider{vertices=List.copyOf(vertices);if(vertices.size()<3)throw new IllegalArgumentException("polygon needs 3 vertices");} }

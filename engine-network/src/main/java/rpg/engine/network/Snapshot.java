@@ -1,0 +1,1 @@
+package rpg.engine.network; import java.util.*; public record Snapshot(List<EntityState> entities) implements Packet {public byte type(){return 4;} public record EntityState(long id,double x,double y,double elevation){} }

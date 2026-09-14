@@ -1,0 +1,3 @@
+package rpg.engine.client;
+import rpg.engine.render.desktop.LwjglRenderer;import rpg.engine.runtime.GameRuntime;import java.nio.file.*;
+public final class DesktopClientMain{public static void main(String[]a)throws Exception{var r=new GameRuntime();if(a.length>0&&Files.exists(Path.of(a[0])))r.loadMap(Path.of(a[0]));try(var g=new LwjglRenderer(1100,700,"openRPGator")){while(!g.shouldClose()){g.poll();g.begin(1100,700);for(int y=0;y<30;y++)for(int x=0;x<30;x++)g.tile(x,y,(x+y)%3);for(var e:r.world().entities().entities())r.world().entities().get(e,rpg.engine.core.component.Transform.class).ifPresent(t->g.sprite(t.position().x(),t.position().y(),t.position().elevation(),0));g.end();r.tick();}}}}

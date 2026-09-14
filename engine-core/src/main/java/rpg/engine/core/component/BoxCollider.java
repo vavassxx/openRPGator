@@ -1,0 +1,1 @@
+package rpg.engine.core.component; import rpg.engine.core.math.Vec2; public record BoxCollider(Vec2 half) implements Collider { public BoxCollider{if(half.x()<0||half.y()<0)throw new IllegalArgumentException();} }

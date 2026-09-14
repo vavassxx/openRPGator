@@ -1,0 +1,1 @@
+package rpg.engine.map; public record TileLayer(String name,int width,int height,int[] tiles,boolean collision){public TileLayer{if(tiles.length!=width*height)throw new IllegalArgumentException("tile count");}}

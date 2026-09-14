@@ -1,0 +1,3 @@
+plugins { id 'application' }
+dependencies { implementation project(':engine-map') }
+application { mainClass = 'rpg.engine.editor.map.MapEditorMain' }

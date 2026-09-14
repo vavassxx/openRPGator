@@ -1,0 +1,1 @@
+package rpg.engine.script; public record Token(Type type,String text,int line,int col){public enum Type{IDENT,NUMBER,STRING,TRUE,FALSE,NIL,LET,IF,ELSE,RETURN,FUNCTION,LP,RP,LBRACE,RBRACE,COMMA,DOT,ASSIGN,PLUS,MINUS,STAR,SLASH,EQ,NE,LT,GT,LE,GE,SEMICOLON,EOF}}

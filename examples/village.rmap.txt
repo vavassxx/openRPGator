@@ -1,0 +1,1 @@
+This directory contains generated maps. Run map-editor to create village.rmap.

@@ -1,0 +1,3 @@
+package rpg.engine.editor.script;
+import rpg.engine.script.Parser;import javax.swing.*;import java.awt.*;
+public final class ScriptEditorMain{public static void main(String[]a){SwingUtilities.invokeLater(()->{var f=new JFrame("RScript Editor");var text=new JTextArea("let x = 1 + 2;\nif (x > 2) { print(x); }");var run=new JButton("Parse");var out=new JLabel("Ready");run.addActionListener(e->{try{new Parser(text.getText()).parse();out.setText("OK");}catch(Exception ex){out.setText(ex.getMessage());}});f.add(new JScrollPane(text),BorderLayout.CENTER);var b=new JPanel();b.add(run);b.add(out);f.add(b,BorderLayout.SOUTH);f.setSize(800,600);f.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);f.setVisible(true);});}}
