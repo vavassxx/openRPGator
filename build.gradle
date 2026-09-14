@@ -1,7 +1,10 @@
 allprojects {
     group = 'rpg.engine'
     version = '0.3.0'
-    repositories { mavenCentral() }
+    repositories {
+        google()
+        mavenCentral()
+    }
 }
 
 subprojects {
