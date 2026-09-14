@@ -1,3 +1,27 @@
 package rpg.engine.runtime;
-import rpg.engine.world.*;import rpg.engine.map.*;import rpg.engine.core.component.*;import rpg.engine.core.math.*;import rpg.engine.script.runtime.*;import java.nio.file.*;import java.io.*;
-public final class GameRuntime {private final GameWorld world=new GameWorld();private final ScriptHost host=new ScriptHost();private final ScriptEngine scripts=new ScriptEngine(host);public GameWorld world(){return world;}public ScriptHost scripts(){return host;}public ScriptEngine scriptEngine(){return scripts;}public void loadMap(Path p)throws IOException{var m=RMapIO.read(p);for(var e:m.entities()){var id=world.spawn();world.entities().set(id,new Name(e.id()));world.entities().set(id,new Transform(e.position(),0));if(e.script()!=null){host.global(e.id(),java.util.Map.of());scripts.execute(Files.readString(Path.of(e.script())));}}}public void tick(){world.step();}}
+
+import rpg.engine.map.*;
+import rpg.engine.world.GameWorld;
+import rpg.engine.script.lua.LuaRuntime;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+
+public final class GameRuntime {
+    private final GameWorld world = new GameWorld();
+    private final LuaRuntime scripts = new LuaRuntime();
+    { scripts.bindWorld(world); }
+    public GameWorld world() { return world; }
+    public LuaRuntime scripts() { return scripts; }
+    public void loadMap(Path path) throws IOException {
+        RMap map = RMapIO.read(path);
+        for (MapEntity e : map.entities()) {
+            var id = world.spawn();
+            world.entities().set(id, new rpg.engine.core.ecs.Name(e.id()));
+            world.entities().set(id, new rpg.engine.core.component.Transform(e.position(), 0));
+            if (e.script() != null) scripts.execute(Files.readString(Path.of(e.script())), e.script());
+        }
+    }
+    public void executeScript(String source, String name) { scripts.execute(source, name); }
+    public void tick() { world.step(); scripts.api().setTick(world.tick()); }
+}

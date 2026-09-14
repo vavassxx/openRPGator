@@ -1,1 +1,4 @@
-dependencies { api project(':engine-world') }
+dependencies {
+    api project(':engine-world')
+    api 'org.luaj:luaj-jse:3.0.1'
+}

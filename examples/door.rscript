@@ -1,2 +1,0 @@
-let opened = false;
-if (opened == false) { opened = true; }

@@ -8,8 +8,8 @@ Java 21, server-authoritative, 2.5D/isometric RPG engine targeting Linux/Windows
 - 2.5D coordinates and deterministic tick loop
 - lightweight collision primitives
 - binary `.rmap` map format
-- Lua-like RScript lexer/parser/interpreter
-- script-driven entity events
+- LuaJ scripting runtime and engine API
+- Lua-driven entity and world events
 - TCP server with length-framed JSON-free binary protocol
 - headless server runnable as a plain JAR on JVM/Termux
 - desktop map editor and script editor

@@ -8,14 +8,14 @@ Implemented:
 - deterministic 2.5D coordinates
 - box/circle/polygon collision and slide-on-axis movement
 - binary RMAP format with round-trip support
-- RScript lexer/parser/interpreter with variables, arithmetic, comparisons, conditions, returns and host functions
+- LuaJ runtime with public engine scripting API
 - TCP length-framed multiplayer protocol
 - headless authoritative dedicated server
 - server JAR entry point suitable for JVM on Linux/Termux/Android ARM64
 - desktop OpenGL renderer implementation
 - desktop client executable
 - functional map editor for creating/loading/saving maps
-- functional script editor for syntax validation
+- functional Lua script editor
 - Android client module using OpenGL ES and the shared runtime
 - unit-test sources and smoke tests
 
@@ -25,7 +25,7 @@ Not yet production-complete:
 - advanced editor tooling (painting/entity inspector/undo/redo)
 - complete Android touch UI and Android server foreground-service wrapper
 - packaging/signing for each desktop target
-- script bytecode VM/JIT and hardened sandbox
+- expanded Lua API, sandbox policy and script tooling
 - persistence/database layer and account/auth system
 
 The architecture deliberately keeps these as subsequent layers rather than faking them with placeholder implementations.
