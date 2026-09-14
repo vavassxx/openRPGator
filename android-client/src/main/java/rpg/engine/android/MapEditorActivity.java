@@ -4,7 +4,7 @@ import android.app.Activity;
 import android.content.Intent;
 import android.graphics.*;
 import android.net.Uri;
-import android.os.Bundle;
+import android.os.*;
 import android.view.*;
 import android.widget.*;
 import java.io.*;
