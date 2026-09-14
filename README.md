@@ -37,3 +37,7 @@ Every push runs `.github/workflows/build.yml`. It produces:
 - `openRPGator-map-editor-universal.apk` — the Android-native `.rmap` map editor as a universal APK.
 
 The Android application is currently the map editor; there is not yet a separate Android client or Android server application. The JVM server itself is headless and can run directly under Termux on ARM64.
+
+## License
+
+GPL-3.0. See [LICENSE](LICENSE).
