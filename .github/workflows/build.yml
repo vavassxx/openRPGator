@@ -92,7 +92,16 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Build Android APK
+      - name: Configure test Android signing key
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "ANDROID_KEYSTORE_FILE=$GITHUB_WORKSPACE/android-client/ci-test.keystore" >> "$GITHUB_ENV"
+          echo "ANDROID_KEYSTORE_PASSWORD=android" >> "$GITHUB_ENV"
+          echo "ANDROID_KEY_ALIAS=openrpgator-test" >> "$GITHUB_ENV"
+          echo "ANDROID_KEY_PASSWORD=android" >> "$GITHUB_ENV"
+
+      - name: Build signed Android APK
         run: gradle --no-daemon :android-client:assembleRelease -PandroidBuild
 
       - name: Verify and stage APK
@@ -101,6 +110,7 @@ jobs:
           set -euo pipefail
           apk=$(find android-client/build/outputs/apk/release -maxdepth 1 -type f -name '*.apk' | head -n 1)
           test -n "$apk"
+          apksigner verify --verbose "$apk"
           mkdir -p dist
           cp "$apk" dist/openRPGator-android-universal.apk
 
