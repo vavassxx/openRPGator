@@ -3,7 +3,7 @@ plugins { id 'com.android.application' version '8.7.3' }
 android {
     namespace 'rpg.engine.android'
     compileSdk 35
-    defaultConfig { applicationId 'rpg.engine.android'; minSdk 26; targetSdk 35; versionCode 3; versionName '0.3.0' }
+    defaultConfig { applicationId 'rpg.engine.android'; minSdk 26; targetSdk 35; versionCode 30203; versionName '0.3.2.3' }
     splits { abi { enable false } }
     compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
 

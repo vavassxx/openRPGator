@@ -40,6 +40,7 @@
 ./engine-network/src/main/java/rpg/engine/network/Protocol.java
 ./engine-network/src/main/java/rpg/engine/network/Snapshot.java
 ./engine-network/src/main/java/rpg/engine/network/Welcome.java
+./engine-network/src/test/java/rpg/engine/network/ProtocolTest.java
 ./engine-runtime/build.gradle
 ./engine-runtime/src/main/java/rpg/engine/runtime/GameRuntime.java
 ./engine-script/build.gradle

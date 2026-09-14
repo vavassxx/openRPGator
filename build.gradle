@@ -1,6 +1,6 @@
 allprojects {
     group = 'rpg.engine'
-    version = '0.3.0'
+    version = '0.3.2.3'
     repositories {
         google()
         mavenCentral()

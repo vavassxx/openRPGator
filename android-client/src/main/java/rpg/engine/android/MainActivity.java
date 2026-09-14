@@ -320,7 +320,7 @@ public final class MainActivity extends Activity implements ClientSession.Listen
         TextView about = new TextView(this);
         about.setTextColor(Color.rgb(140, 140, 140));
         about.setTextSize(12);
-        about.setText("openRPGator 0.3.1\nGPL-3.0\nServer-authoritative 2.5D RPG engine");
+        about.setText("openRPGator 0.3.2.3\nGPL-3.0\nServer-authoritative 2.5D RPG engine");
         root.addView(about);
 
         // Back button at bottom

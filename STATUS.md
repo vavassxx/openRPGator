@@ -1,4 +1,4 @@
-# Implementation status — 0.2.0
+# Implementation status — 0.3.2.3
 
 This repository is a real, buildable foundation/vertical slice, not a collection of placeholder classes.
 
@@ -30,7 +30,7 @@ Not yet production-complete:
 
 The architecture deliberately keeps these as subsequent layers rather than faking them with placeholder implementations.
 
-## Android Map Editor 0.2.0
+## Android Map Editor 0.3.2.3
 - Android-native `.rmap` editor replaces the old Swing-only story for mobile workflows.
 - Open/create/save `.rmap` through Android Storage Access Framework.
 - Paint tiles, erase, collision editing and entity placement.
