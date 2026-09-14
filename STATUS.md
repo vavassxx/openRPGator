@@ -48,3 +48,6 @@ The architecture deliberately keeps these as subsequent layers rather than fakin
 ## Android client input system
 
 The Android client now uses a semantic, user-editable control layer. Gameplay receives logical actions (`MOVE_*`, `PRIMARY`, `SECONDARY`, `INTERACT`, `INVENTORY`) rather than hard-coded screen coordinates. Control widgets can be moved, resized, remapped to another action, toggled between button and joystick presentation, added, deleted, and persisted locally. Network `Input` packets carry both movement and an action bitmask so the server protocol is no longer tied to a particular touch layout.
+
+## Android local server
+The Android client now contains a Java-17-compatible embedded TCP backend. Use **Local server** to start it on the selected port, then press **Connect** with host `127.0.0.1`. The backend supports Hello/Welcome/Input/Snapshot and multiple local clients, and is stopped with the same button or when the activity closes.

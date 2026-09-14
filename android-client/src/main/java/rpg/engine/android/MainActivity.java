@@ -19,11 +19,13 @@ public final class MainActivity extends Activity implements ClientSession.Listen
     private int actionBits;
     private boolean editing;
     private TextView status;
+    private LocalServerBackend localServer;
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
         controls=ControlLayout.load(this);
         session=new ClientSession(this);
+        localServer=new LocalServerBackend(s -> runOnUiThread(() -> status.setText(s)));
         showGame();
     }
 
@@ -31,14 +33,28 @@ public final class MainActivity extends Activity implements ClientSession.Listen
         LinearLayout root=new LinearLayout(this);root.setOrientation(LinearLayout.VERTICAL);root.setBackgroundColor(Color.rgb(18,19,22));
         LinearLayout bar=new LinearLayout(this);bar.setGravity(Gravity.CENTER_VERTICAL);bar.setPadding(8,4,8,4);
         EditText host=field("server", "127.0.0.1"); EditText port=field("port","27991"); EditText name=field("name","player");
-        Button connect=button("Connect"), edit=button("Controls"), save=button("Save layout"), map=button("Map editor");
+        Button connect=button("Connect"), local=button("Local server"), edit=button("Controls"), save=button("Save layout"), map=button("Map editor");
         status=new TextView(this);status.setTextColor(Color.WHITE);status.setText("Offline");
         bar.addView(host,new LinearLayout.LayoutParams(0,48,2));bar.addView(port,new LinearLayout.LayoutParams(0,48,1));bar.addView(name,new LinearLayout.LayoutParams(0,48,1));bar.addView(connect);
         bar.addView(edit);bar.addView(save);bar.addView(map);bar.addView(status,new LinearLayout.LayoutParams(0,48,1));root.addView(bar,new LinearLayout.LayoutParams(-1,56));
         FrameLayout stage=new FrameLayout(this);game=new GameView(this);stage.addView(game,new FrameLayout.LayoutParams(-1,-1));
         overlay=new ControlOverlay(this,controls,(a,pressed)->onAction(a,pressed));stage.addView(overlay,new FrameLayout.LayoutParams(-1,-1));root.addView(stage,new LinearLayout.LayoutParams(-1,0,1));
+        local.setOnClickListener(v->{
+            try {
+                if (!localServer.isRunning()) {
+                    int p=Integer.parseInt(port.getText().toString().trim());
+                    localServer.start(p);
+                    host.setText("127.0.0.1");
+                    status.setText("Local server started; press Connect");
+                    local.setText("Stop local server");
+                } else {
+                    localServer.stop();
+                    local.setText("Local server");
+                }
+            } catch(Exception e) { status.setText("Local server failed: "+e.getMessage()); }
+        });
         connect.setOnClickListener(v->{try{session.connect(host.getText().toString().trim(),Integer.parseInt(port.getText().toString().trim()),name.getText().toString().trim());status.setText("Connecting…");}catch(Exception e){status.setText("Bad address");}});
-        edit.setOnClickListener(v->{editing=!editing;overlay.setEditMode(editing);edit.setText(editing?"Play":"Controls");status.setText(editing?"Drag controls; tap selected then use editor below":"Playing");});
+        edit.setOnClickListener(v->{editing=!editing;overlay.setEditMode(editing);edit.setText(editing?"Play":"Controls");status.setText(editing?"Перетаскивайте зоны; подпись показывает действие":"Игра");});
         save.setOnClickListener(v->{controls.save(this);status.setText("Controls saved");});
         map.setOnClickListener(v->startActivity(new Intent(this,MapEditorActivity.class)));
         // A compact editor row appears while controls are being customized.
@@ -48,7 +64,7 @@ public final class MainActivity extends Activity implements ClientSession.Listen
         type.setOnClickListener(v->{overlay.cycleType();});
         smaller.setOnClickListener(v->{if(overlay.selected()!=null){overlay.selected().size=Math.max(.05f,overlay.selected().size-.02f);overlay.invalidate();}});
         larger.setOnClickListener(v->{if(overlay.selected()!=null){overlay.selected().size=Math.min(.35f,overlay.selected().size+.02f);overlay.invalidate();}});
-        add.setOnClickListener(v->{overlay.setEditMode(true);editing=true;ControlBinding b=controls.addCustom(ControlAction.PRIMARY,ControlType.BUTTON,.5f,.5f,.12f,"A");overlay.select(b);status.setText("New control selected; drag it");});
+        add.setOnClickListener(v->{overlay.setEditMode(true);editing=true;ControlBinding b=controls.addCustom(ControlAction.PRIMARY,ControlType.BUTTON,.5f,.5f,.12f,"A");overlay.select(b);status.setText("Новая кнопка: перетащите её; подпись показывает действие");});
         remove.setOnClickListener(v->{if(overlay.selected()!=null){controls.remove(overlay.selected());overlay.invalidate();}});
         setContentView(root);
     }
@@ -59,7 +75,7 @@ public final class MainActivity extends Activity implements ClientSession.Listen
     @Override public void connected(Welcome w){runOnUiThread(()->status.setText("Connected #"+w.entityId()));}
     @Override public void snapshot(Snapshot s){runOnUiThread(()->game.setSnapshot(s));}
     @Override public void status(String s){runOnUiThread(()->status.setText(s));}
-    @Override protected void onDestroy(){session.disconnect();super.onDestroy();}
+    @Override protected void onDestroy(){session.disconnect();if(localServer!=null)localServer.stop();super.onDestroy();}
 
     final class GameView extends View{
         private Snapshot snapshot=new Snapshot(List.of());private final Paint p=new Paint(Paint.ANTI_ALIAS_FLAG);
