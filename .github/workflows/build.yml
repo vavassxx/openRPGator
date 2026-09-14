@@ -123,7 +123,7 @@ jobs:
 
   release:
     name: Publish GitHub Release
-    needs: [linux, android]
+    needs: [jvm, android]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
