@@ -61,8 +61,9 @@ public final class AppStorage {
         Uri file = findChild(dir, name);
         if(file == null) file = DocumentsContract.createDocument(context.getContentResolver(),dir,"text/plain",name);
         if(file==null) throw new IOException("Could not create log file");
+        final Uri logFile = file;
         try {
-            OutputStream out = context.getContentResolver().openOutputStream(file,"wa");
+            OutputStream out = context.getContentResolver().openOutputStream(logFile,"wa");
             if(out!=null) return out;
         } catch(Exception ignored) {
             // Some DocumentsProvider implementations do not support append mode.
@@ -70,13 +71,13 @@ public final class AppStorage {
         // Portable fallback: read the current document and rewrite it with the caller's bytes appended.
         // The returned stream is a buffer; close() commits the complete document.
         final byte[] previous;
-        try(InputStream in=context.getContentResolver().openInputStream(file)) {
+        try(InputStream in=context.getContentResolver().openInputStream(logFile)) {
             previous = in==null ? new byte[0] : readAll(in);
         }
         return new FilterOutputStream(new ByteArrayOutputStream()) {
             @Override public void close() throws IOException {
                 ByteArrayOutputStream buffer=(ByteArrayOutputStream)out;
-                try(OutputStream target=context.getContentResolver().openOutputStream(file,"w")) {
+                try(OutputStream target=context.getContentResolver().openOutputStream(logFile,"w")) {
                     if(target==null) throw new IOException("Could not open log file for rewrite");
                     target.write(previous);
                     buffer.writeTo(target);
