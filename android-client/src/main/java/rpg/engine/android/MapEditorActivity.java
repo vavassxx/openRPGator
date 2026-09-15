@@ -6,6 +6,8 @@ import android.graphics.*;
 import android.net.Uri;
 import android.os.*;
 import android.view.*;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import android.widget.*;
 import java.io.*;
 import java.util.*;
@@ -14,12 +16,17 @@ import rpg.engine.map.*;
 
 /** A deliberately dependency-light Android .rmap editor: no engine renderer, no OpenGL, no desktop UI. */
 public final class MapEditorActivity extends Activity {
+    private AppStorage appStorage;
+    private AppLogger logger;
     private static final int OPEN = 10, SAVE = 11;
     private EditorView editor;
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
         applyImmersive();
+        appStorage = new AppStorage(this);
+        logger = AppLogger.get(this);
+        logger.info("Map editor opened");
         editor = new EditorView();
         buildUi();
     }
@@ -56,8 +63,8 @@ public final class MapEditorActivity extends Activity {
         bar.setGravity(Gravity.CENTER_VERTICAL);
         bar.setPadding(8,6,8,6);
 
-        Button open = button("Open"); open.setOnClickListener(v -> pick(OPEN, "application/octet-stream"));
-        Button save = button("Save"); save.setOnClickListener(v -> pick(SAVE, "application/octet-stream"));
+        Button open = button("Open"); open.setOnClickListener(v -> openMap());
+        Button save = button("Save"); save.setOnClickListener(v -> saveMap());
         Button newMap = button("New"); newMap.setOnClickListener(v -> newMapDialog());
         Button mode = button("Paint"); mode.setOnClickListener(v -> { editor.mode = editor.mode == Mode.PAINT ? Mode.COLLISION : editor.mode == Mode.COLLISION ? Mode.ENTITY : Mode.PAINT; mode.setText(editor.mode.label); });
         Button erase = button("Erase"); erase.setOnClickListener(v -> editor.erase = !editor.erase);
@@ -82,6 +89,36 @@ public final class MapEditorActivity extends Activity {
     private Button button(String text) { Button b = new Button(this); b.setText(text); b.setTextSize(11); return b; }
     private int dp(int n) { return (int)(n * getResources().getDisplayMetrics().density + .5f); }
 
+    private void saveMap() {
+        try {
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            RMapIO.write(editor.map, out);
+            appStorage.saveMap(editor.map.name() + ".rmap", out.toByteArray());
+            logger.info("Saved map: " + editor.map.name());
+            Toast.makeText(this, "Saved to application data/maps", Toast.LENGTH_SHORT).show();
+        } catch (Exception e) {
+            logger.error("Failed to save map: " + editor.map.name(), e);
+            Toast.makeText(this, "RMAP save: " + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void openMap() {
+        final EditText name = edit("map file", editor.map.name() + ".rmap");
+        new android.app.AlertDialog.Builder(this).setTitle("Open map from data/maps")
+            .setView(name).setNegativeButton("Cancel", null).setPositiveButton("Open", (d,w) -> {
+                try {
+                    byte[] data = appStorage.loadMap(name.getText().toString().trim());
+                    if(data == null) { Toast.makeText(this, "Map not found", Toast.LENGTH_SHORT).show(); return; }
+                    try(InputStream in = new ByteArrayInputStream(data)) { editor.map = RMapIO.read(in); }
+                    editor.resetView(); editor.invalidate();
+                    logger.info("Opened map: " + editor.map.name());
+                } catch(Exception e) {
+                    logger.error("Failed to open map", e);
+                    Toast.makeText(this, "RMAP open: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                }
+            }).show();
+    }
+
     private void pick(int action, String type) {
         Intent i = new Intent(action == OPEN ? Intent.ACTION_OPEN_DOCUMENT : Intent.ACTION_CREATE_DOCUMENT);
         i.setType(type); i.putExtra(Intent.EXTRA_TITLE, editor.map.name() + ".rmap");
@@ -95,7 +132,7 @@ public final class MapEditorActivity extends Activity {
             if (request == OPEN) { try (InputStream in = getContentResolver().openInputStream(uri)) { editor.map = RMapIO.read(in); editor.resetView(); } }
             else { try (OutputStream out = getContentResolver().openOutputStream(uri)) { RMapIO.write(editor.map, out); } }
             editor.invalidate();
-        } catch (Exception e) { Toast.makeText(this, "RMAP: " + e.getMessage(), Toast.LENGTH_LONG).show(); }
+        } catch (Exception e) { logger.error("RMAP file picker operation failed", e); Toast.makeText(this, "RMAP: " + e.getMessage(), Toast.LENGTH_LONG).show(); }
     }
 
     private void newMapDialog() {

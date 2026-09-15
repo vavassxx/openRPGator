@@ -23,6 +23,7 @@ public final class MainActivity extends Activity implements ClientSession.Listen
     private LocalServerBackend localServer;
     private SharedPreferences prefs;
     private AppStorage appStorage;
+    private AppLogger logger;
     private static final int PICK_STORAGE = 9001;
 
     @Override public void onCreate(Bundle state) {
@@ -31,6 +32,13 @@ public final class MainActivity extends Activity implements ClientSession.Listen
         session = new ClientSession(this);
         prefs = getSharedPreferences("openrpgator.settings.v1", MODE_PRIVATE);
         appStorage = new AppStorage(this);
+        logger = AppLogger.get(this);
+        logger.info("Application started");
+        Thread.setDefaultUncaughtExceptionHandler((thread, error) -> {
+            logger.error("Uncaught exception on " + thread.getName(), error);
+            try { Thread.sleep(100); } catch (InterruptedException ignored) {}
+            System.exit(1);
+        });
         localServer = new LocalServerBackend(s -> runOnUiThread(() -> status.setText(s)));
         showMainMenu();
     }
@@ -89,6 +97,7 @@ public final class MainActivity extends Activity implements ClientSession.Listen
     }
 
     private void onMenu(String label) {
+        logger.info("Main menu: " + label);
         switch (label) {
             case "Play": showGame(); break;
             case "Map editor": startActivity(new Intent(this, MapEditorActivity.class)); break;
@@ -187,7 +196,7 @@ public final class MainActivity extends Activity implements ClientSession.Listen
             try {
                 session.connect(h, Integer.parseInt(p), n);
                 status.setText("Connecting to " + h + ":" + p + "...");
-            } catch (Exception e) { status.setText("Invalid address or port"); }
+            } catch (Exception e) { logger.error("Connection failed", e); status.setText("Invalid address or port"); }
         });
         local.setOnClickListener(v -> {
             try {
@@ -264,15 +273,20 @@ public final class MainActivity extends Activity implements ClientSession.Listen
         title.setPadding(0, 0, 0, dp(16));
         root.addView(title);
 
+        Button mainMenu = new Button(this);
+        mainMenu.setText("Main menu");
+        mainMenu.setOnClickListener(v -> showMainMenu());
+        root.addView(mainMenu, new LinearLayout.LayoutParams(-1, dp(48)));
+
         // Storage info
         TextView storage = new TextView(this);
         storage.setTextColor(Color.rgb(180, 180, 180));
         storage.setTextSize(13);
         storage.setText(
             "Data storage:\n" +
-            "• Control layouts: app private storage (SharedPreferences)\n" +
-            "• Maps (.rmap): user-selected location via system file picker\n" +
-            "• Connection history: app private storage\n" +
+            "• Maps: selected application data folder / maps\n" +
+            "• Logs: selected application data folder / logs\n" +
+            "• Settings: Android app preferences\n" +
             "• No data is stored on external servers"
         );
         root.addView(storage, new LinearLayout.LayoutParams(-1, -2));
@@ -364,6 +378,7 @@ public final class MainActivity extends Activity implements ClientSession.Listen
             Uri uri = data.getData();
             try { getContentResolver().takePersistableUriPermission(uri, data.getFlags() & (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION)); } catch (Exception ignored) {}
             appStorage.setRoot(uri);
+            logger.info("Application data folder changed: " + uri);
             Toast.makeText(this, "Data folder selected", Toast.LENGTH_SHORT).show();
             showSettings();
         }
@@ -405,7 +420,7 @@ public final class MainActivity extends Activity implements ClientSession.Listen
     @Override public void connected(Welcome w) { runOnUiThread(() -> status.setText("Connected #" + w.entityId())); }
     @Override public void snapshot(Snapshot s) { runOnUiThread(() -> game.setSnapshot(s)); }
     @Override public void status(String s) { runOnUiThread(() -> status.setText(s)); }
-    @Override protected void onDestroy() { session.disconnect(); if (localServer != null) localServer.stop(); super.onDestroy(); }
+    @Override protected void onDestroy() { logger.info("Application stopping"); session.disconnect(); if (localServer != null) localServer.stop(); super.onDestroy(); }
 
     // ── Game view ───────────────────────────────────────────────────
     final class GameView extends View {
