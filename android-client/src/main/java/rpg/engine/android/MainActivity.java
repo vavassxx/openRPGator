@@ -34,11 +34,6 @@ public final class MainActivity extends Activity implements ClientSession.Listen
         appStorage = new AppStorage(this);
         logger = AppLogger.get(this);
         logger.info("Application started");
-        Thread.setDefaultUncaughtExceptionHandler((thread, error) -> {
-            logger.error("Uncaught exception on " + thread.getName(), error);
-            try { Thread.sleep(100); } catch (InterruptedException ignored) {}
-            System.exit(1);
-        });
         localServer = new LocalServerBackend(s -> runOnUiThread(() -> status.setText(s)));
         showMainMenu();
     }
@@ -369,7 +364,10 @@ public final class MainActivity extends Activity implements ClientSession.Listen
         });
         root.addView(exit, new LinearLayout.LayoutParams(-1, dp(52)));
 
-        setContentView(root);
+        ScrollView scroll = new ScrollView(this);
+        scroll.setFillViewport(true);
+        scroll.addView(root);
+        setContentView(scroll);
     }
 
     @Override protected void onActivityResult(int request, int result, Intent data) {

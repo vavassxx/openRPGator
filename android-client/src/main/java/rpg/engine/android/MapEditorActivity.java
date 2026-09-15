@@ -26,9 +26,16 @@ public final class MapEditorActivity extends Activity {
         applyImmersive();
         appStorage = new AppStorage(this);
         logger = AppLogger.get(this);
-        logger.info("Map editor opened");
-        editor = new EditorView();
-        buildUi();
+        logger.info("Map editor opening");
+        try {
+            editor = new EditorView();
+            buildUi();
+            logger.info("Map editor UI ready");
+        } catch (Throwable t) {
+            logger.error("Map editor failed during initialization", t);
+            Toast.makeText(this, "Map editor failed: " + t.getClass().getSimpleName(), Toast.LENGTH_LONG).show();
+            finish();
+        }
     }
 
     private void applyImmersive() {
@@ -70,7 +77,10 @@ public final class MapEditorActivity extends Activity {
         Button erase = button("Erase"); erase.setOnClickListener(v -> editor.erase = !editor.erase);
         bar.addView(open); bar.addView(save); bar.addView(newMap); bar.addView(mode); bar.addView(erase);
 
-        root.addView(bar, new LinearLayout.LayoutParams(-1, dp(52)));
+        HorizontalScrollView toolbarScroll = new HorizontalScrollView(this);
+        toolbarScroll.setHorizontalScrollBarEnabled(false);
+        toolbarScroll.addView(bar, new ViewGroup.LayoutParams(-2, dp(52)));
+        root.addView(toolbarScroll, new LinearLayout.LayoutParams(-1, dp(52)));
         root.addView(editor, new LinearLayout.LayoutParams(-1, 0, 1));
         root.addView(palette(), new LinearLayout.LayoutParams(-1, dp(62)));
         setContentView(root);
@@ -140,20 +150,26 @@ public final class MapEditorActivity extends Activity {
         EditText name = edit("map name", "new_map"); EditText width = edit("width", "32"); EditText height = edit("height", "32");
         box.addView(name); box.addView(width); box.addView(height);
         new android.app.AlertDialog.Builder(this).setTitle("New RMap").setView(box).setNegativeButton("Cancel", null).setPositiveButton("Create", (d,w) -> {
-            try { int x = Math.max(1, Math.min(512, Integer.parseInt(width.getText().toString()))); int y = Math.max(1, Math.min(512, Integer.parseInt(height.getText().toString()))); editor.map = EditorView.blank(name.getText().toString(), x, y); editor.resetView(); editor.invalidate(); }
+            try { int x = Math.max(1, Math.min(512, Integer.parseInt(width.getText().toString()))); int y = Math.max(1, Math.min(512, Integer.parseInt(height.getText().toString()))); editor.map = blankMap(name.getText().toString(), x, y); editor.resetView(); editor.invalidate(); }
             catch (Exception e) { Toast.makeText(this, "Bad map size", Toast.LENGTH_SHORT).show(); }
         }).show();
     }
     private EditText edit(String hint, String value) { EditText e = new EditText(this); e.setHint(hint); e.setText(value); e.setSingleLine(); return e; }
 
+    private RMap blankMap(String name, int w, int h) {
+        String n = name == null || name.trim().isEmpty() ? "new_map" : name;
+        return new RMap(n, 1, w, h, Collections.singletonList(
+            new TileLayer("ground", w, h, new int[w*h], false)),
+            new ArrayList<MapEntity>());
+    }
+
     enum Mode { PAINT("Paint"), COLLISION("Collision"), ENTITY("Entity"); final String label; Mode(String s){label=s;} }
 
     final class EditorView extends View {
-        RMap map = blank("new_map", 32, 32);
+        RMap map = blankMap("new_map", 32, 32);
         Mode mode = Mode.PAINT; int selectedTile = 1; boolean erase; float zoom = 1f, ox = 0, oy = 0; float downX, downY, lastX, lastY; boolean dragging;
         final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG); final int grid = 48;
         EditorView() { super(MapEditorActivity.this); paint.setTypeface(Typeface.create("sans", Typeface.NORMAL)); setFocusable(true); }
-        static RMap blank(String name, int w, int h) { return new RMap(name == null || name.trim().isEmpty() ? "new_map" : name, 1, w, h, Collections.singletonList(new TileLayer("ground", w, h, new int[w*h], false)), new ArrayList<MapEntity>()); }
         void resetView(){ zoom=1; ox=getWidth()/2f; oy=80; }
 
         @Override protected void onDraw(Canvas c) {

@@ -20,12 +20,31 @@ public final class AppStorage {
     }
 
     public void setRoot(Uri uri){
-        context.getSharedPreferences(PREF,0).edit().putString(KEY,uri.toString()).apply();
+        if(uri == null) {
+            context.getSharedPreferences(PREF,0).edit().remove(KEY).apply();
+            return;
+        }
+        context.getSharedPreferences(PREF,0).edit().putString(KEY,uri.toString()).commit();
     }
 
     public String description(){
         Uri u=root();
         return u==null?"App-private storage (default)":u.toString();
+    }
+
+    /** Verifies that the selected tree is still writable. */
+    public boolean isWritable() {
+        Uri tree=root();
+        if(tree==null) return true;
+        try {
+            Uri dir=ensureDirectory(tree,"logs");
+            Uri file=findChild(dir,".openrpgator-write-test");
+            if(file==null) file=DocumentsContract.createDocument(context.getContentResolver(),dir,"text/plain",".openrpgator-write-test");
+            if(file==null) return false;
+            try(OutputStream out=context.getContentResolver().openOutputStream(file,"w")){ if(out==null) return false; out.write(1); }
+            DocumentsContract.deleteDocument(context.getContentResolver(),file);
+            return true;
+        } catch(Exception e) { return false; }
     }
 
     public File privateLogFile(String name){
@@ -42,9 +61,29 @@ public final class AppStorage {
         Uri file = findChild(dir, name);
         if(file == null) file = DocumentsContract.createDocument(context.getContentResolver(),dir,"text/plain",name);
         if(file==null) throw new IOException("Could not create log file");
-        OutputStream out = context.getContentResolver().openOutputStream(file,"wa");
-        if(out==null) throw new IOException("Could not open log file");
-        return out;
+        try {
+            OutputStream out = context.getContentResolver().openOutputStream(file,"wa");
+            if(out!=null) return out;
+        } catch(Exception ignored) {
+            // Some DocumentsProvider implementations do not support append mode.
+        }
+        // Portable fallback: read the current document and rewrite it with the caller's bytes appended.
+        // The returned stream is a buffer; close() commits the complete document.
+        final byte[] previous;
+        try(InputStream in=context.getContentResolver().openInputStream(file)) {
+            previous = in==null ? new byte[0] : readAll(in);
+        }
+        return new FilterOutputStream(new ByteArrayOutputStream()) {
+            @Override public void close() throws IOException {
+                ByteArrayOutputStream buffer=(ByteArrayOutputStream)out;
+                try(OutputStream target=context.getContentResolver().openOutputStream(file,"w")) {
+                    if(target==null) throw new IOException("Could not open log file for rewrite");
+                    target.write(previous);
+                    buffer.writeTo(target);
+                }
+                super.close();
+            }
+        };
     }
 
     /** Saves a map under the selected root/maps directory. Existing files are replaced. */
