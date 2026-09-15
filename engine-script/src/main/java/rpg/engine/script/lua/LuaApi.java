@@ -4,7 +4,7 @@ import org.luaj.vm2.*;
 import org.luaj.vm2.lib.*;
 import rpg.engine.core.component.Transform;
 import rpg.engine.core.ecs.EntityId;
-import rpg.engine.core.ecs.Name;
+import rpg.engine.core.component.Name;
 import rpg.engine.core.math.WorldPosition;
 import rpg.engine.world.GameWorld;
 
@@ -55,7 +55,7 @@ public final class LuaApi {
     private LuaTable positionFacade(EntityId id) {
         LuaTable p = new LuaTable();
         var tr = world.entities().get(id, Transform.class).orElse(new Transform(new WorldPosition(0, 0, 0), 0));
-        p.set("x", valueOf(tr.position().x())); p.set("y", valueOf(tr.position().y())); p.set("z", valueOf(tr.position().z()));
+        p.set("x", LuaDouble.valueOf(tr.position().x())); p.set("y", LuaDouble.valueOf(tr.position().y())); p.set("z", LuaDouble.valueOf(tr.position().elevation()));
         return p;
     }
 }

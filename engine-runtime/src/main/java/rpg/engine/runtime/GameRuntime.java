@@ -17,7 +17,7 @@ public final class GameRuntime {
         RMap map = RMapIO.read(path);
         for (MapEntity e : map.entities()) {
             var id = world.spawn();
-            world.entities().set(id, new rpg.engine.core.ecs.Name(e.id()));
+            world.entities().set(id, new rpg.engine.core.component.Name(e.id()));
             world.entities().set(id, new rpg.engine.core.component.Transform(e.position(), 0));
             if (e.script() != null) scripts.execute(Files.readString(Path.of(e.script())), e.script());
         }
