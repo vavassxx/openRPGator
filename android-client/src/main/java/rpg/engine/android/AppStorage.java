@@ -21,10 +21,24 @@ public final class AppStorage {
 
     public void setRoot(Uri uri){
         if(uri == null) {
-            context.getSharedPreferences(PREF,0).edit().remove(KEY).apply();
+            context.getSharedPreferences(PREF,0).edit().remove(KEY).commit();
             return;
         }
         context.getSharedPreferences(PREF,0).edit().putString(KEY,uri.toString()).commit();
+    }
+
+    /** Persists the SAF grant and remembers the selected tree. */
+    public boolean setRootAndPersist(Uri uri, int flags) {
+        if(uri == null) return false;
+        int takeFlags = flags & (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+        try {
+            context.getContentResolver().takePersistableUriPermission(uri, takeFlags);
+        } catch (Exception ignored) {
+            // Some providers grant only a transient permission. We still remember the URI;
+            // isWritable() will report whether it can actually be used.
+        }
+        setRoot(uri);
+        return isWritable();
     }
 
     public String description(){
@@ -41,7 +55,7 @@ public final class AppStorage {
             Uri file=findChild(dir,".openrpgator-write-test");
             if(file==null) file=DocumentsContract.createDocument(context.getContentResolver(),dir,"text/plain",".openrpgator-write-test");
             if(file==null) return false;
-            try(OutputStream out=context.getContentResolver().openOutputStream(file,"w")){ if(out==null) return false; out.write(1); }
+            try(OutputStream out=context.getContentResolver().openOutputStream(file,"w")){ if(out==null) return false; out.write(1); out.flush(); }
             DocumentsContract.deleteDocument(context.getContentResolver(),file);
             return true;
         } catch(Exception e) { return false; }

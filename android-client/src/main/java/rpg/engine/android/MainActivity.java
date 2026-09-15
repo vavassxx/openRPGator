@@ -374,10 +374,16 @@ public final class MainActivity extends Activity implements ClientSession.Listen
         super.onActivityResult(request, result, data);
         if (request == PICK_STORAGE && result == RESULT_OK && data != null && data.getData() != null) {
             Uri uri = data.getData();
-            try { getContentResolver().takePersistableUriPermission(uri, data.getFlags() & (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION)); } catch (Exception ignored) {}
-            appStorage.setRoot(uri);
-            logger.info("Application data folder changed: " + uri);
-            Toast.makeText(this, "Data folder selected", Toast.LENGTH_SHORT).show();
+            int flags = data.getFlags() & (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+            boolean writable = appStorage.setRootAndPersist(uri, flags);
+            logger.info("Application data folder changed: " + uri + "; writable=" + writable);
+            if (writable) {
+                logger.info("Persistent storage test succeeded");
+                Toast.makeText(this, "Data folder selected and writable", Toast.LENGTH_SHORT).show();
+            } else {
+                logger.error("Selected data folder is not writable: " + uri, null);
+                Toast.makeText(this, "Folder selected, but Android did not grant write access", Toast.LENGTH_LONG).show();
+            }
             showSettings();
         }
     }
