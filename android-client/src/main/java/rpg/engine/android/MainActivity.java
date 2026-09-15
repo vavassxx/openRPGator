@@ -8,6 +8,7 @@ import android.os.*;
 import android.view.*;
 import android.widget.*;
 import java.util.*;
+import java.io.File;
 import rpg.engine.android.controls.*;
 import rpg.engine.network.*;
 
@@ -253,6 +254,35 @@ public final class MainActivity extends Activity implements ClientSession.Listen
         return b;
     }
 
+    private void shareLog() {
+        try {
+            File logFile = logger.privateLogFile();
+            if (!logFile.isFile()) {
+                logger.info("Log export requested before private log file existed");
+            }
+            if (!logFile.isFile()) {
+                Toast.makeText(this, "Log file is not available yet", Toast.LENGTH_LONG).show();
+                return;
+            }
+
+            Uri uri = androidx.core.content.FileProvider.getUriForFile(
+                this,
+                getPackageName() + ".fileprovider",
+                logFile
+            );
+
+            Intent share = new Intent(Intent.ACTION_SEND);
+            share.setType("text/plain");
+            share.putExtra(Intent.EXTRA_STREAM, uri);
+            share.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            startActivity(Intent.createChooser(share, "Send openRPGator log"));
+            logger.info("Log export requested: " + logFile.getAbsolutePath());
+        } catch (Exception e) {
+            logger.error("Could not share private log", e);
+            Toast.makeText(this, "Could not open Android share dialog: " + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+
     // ── Settings screen ─────────────────────────────────────────────
     private void showSettings() {
         LinearLayout root = new LinearLayout(this);
@@ -272,6 +302,11 @@ public final class MainActivity extends Activity implements ClientSession.Listen
         mainMenu.setText("Main menu");
         mainMenu.setOnClickListener(v -> showMainMenu());
         root.addView(mainMenu, new LinearLayout.LayoutParams(-1, dp(48)));
+
+        Button shareLog = new Button(this);
+        shareLog.setText("Share log");
+        shareLog.setOnClickListener(v -> shareLog());
+        root.addView(shareLog, new LinearLayout.LayoutParams(-1, dp(48)));
 
         // Storage info
         TextView storage = new TextView(this);
