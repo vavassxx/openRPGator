@@ -2,6 +2,7 @@ package rpg.engine.android;
 
 import android.app.*;
 import android.content.*;
+import android.net.Uri;
 import android.graphics.*;
 import android.os.*;
 import android.view.*;
@@ -21,12 +22,15 @@ public final class MainActivity extends Activity implements ClientSession.Listen
     private TextView status;
     private LocalServerBackend localServer;
     private SharedPreferences prefs;
+    private AppStorage appStorage;
+    private static final int PICK_STORAGE = 9001;
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
         controls = ControlLayout.load(this);
         session = new ClientSession(this);
         prefs = getSharedPreferences("openrpgator.settings.v1", MODE_PRIVATE);
+        appStorage = new AppStorage(this);
         localServer = new LocalServerBackend(s -> runOnUiThread(() -> status.setText(s)));
         showMainMenu();
     }
@@ -273,6 +277,17 @@ public final class MainActivity extends Activity implements ClientSession.Listen
         );
         root.addView(storage, new LinearLayout.LayoutParams(-1, -2));
 
+        // Storage section
+        root.addView(sectionLabel("Application data folder"));
+        TextView storagePath = new TextView(this);
+        storagePath.setTextColor(Color.rgb(180,180,180));
+        storagePath.setText(appStorage.description());
+        root.addView(storagePath);
+        Button chooseStorage = new Button(this);
+        chooseStorage.setText("Choose data folder");
+        chooseStorage.setOnClickListener(v -> { Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE); i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION); startActivityForResult(i, PICK_STORAGE); });
+        root.addView(chooseStorage, new LinearLayout.LayoutParams(-1, dp(48)));
+
         // Control layout section
         TextView controlsLabel = sectionLabel("Control layout");
         root.addView(controlsLabel);
@@ -331,7 +346,27 @@ public final class MainActivity extends Activity implements ClientSession.Listen
         backLp.setMargins(0, dp(24), 0, 0);
         root.addView(back, backLp);
 
+        Button exit = new Button(this);
+        exit.setText("Exit application");
+        exit.setOnClickListener(v -> {
+            session.disconnect();
+            if (localServer != null && localServer.isRunning()) localServer.stop();
+            finishAffinity();
+        });
+        root.addView(exit, new LinearLayout.LayoutParams(-1, dp(52)));
+
         setContentView(root);
+    }
+
+    @Override protected void onActivityResult(int request, int result, Intent data) {
+        super.onActivityResult(request, result, data);
+        if (request == PICK_STORAGE && result == RESULT_OK && data != null && data.getData() != null) {
+            Uri uri = data.getData();
+            try { getContentResolver().takePersistableUriPermission(uri, data.getFlags() & (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION)); } catch (Exception ignored) {}
+            appStorage.setRoot(uri);
+            Toast.makeText(this, "Data folder selected", Toast.LENGTH_SHORT).show();
+            showSettings();
+        }
     }
 
     private TextView sectionLabel(String text) {

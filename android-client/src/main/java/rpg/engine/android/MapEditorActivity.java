@@ -116,7 +116,7 @@ public final class MapEditorActivity extends Activity {
         Mode mode = Mode.PAINT; int selectedTile = 1; boolean erase; float zoom = 1f, ox = 0, oy = 0; float downX, downY, lastX, lastY; boolean dragging;
         final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG); final int grid = 48;
         EditorView() { super(MapEditorActivity.this); paint.setTypeface(Typeface.create("sans", Typeface.NORMAL)); setFocusable(true); }
-        static RMap blank(String name, int w, int h) { return new RMap(name == null || name.isBlank() ? "new_map" : name, 1, w, h, List.of(new TileLayer("ground", w, h, new int[w*h], false)), new ArrayList<>()); }
+        static RMap blank(String name, int w, int h) { return new RMap(name == null || name.trim().isEmpty() ? "new_map" : name, 1, w, h, Collections.singletonList(new TileLayer("ground", w, h, new int[w*h], false)), new ArrayList<MapEntity>()); }
         void resetView(){ zoom=1; ox=getWidth()/2f; oy=80; }
 
         @Override protected void onDraw(Canvas c) {
