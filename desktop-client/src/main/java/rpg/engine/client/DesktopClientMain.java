@@ -16,8 +16,6 @@ import java.util.Properties;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
-import static org.lwjgl.glfw.GLFW.*;
-
 /**
  * Desktop game client — connects to a server, renders isometric tiles from an .rmap file,
  * receives snapshots for entity state, and sends keyboard input.
@@ -127,20 +125,20 @@ public final class DesktopClientMain {
                 // ── Keyboard → movement ──────────────────────────
                 double dx = 0, dy = 0;
                 int actions = 0;
-                if (renderer.keyDown(GLFW_KEY_D) || renderer.keyDown(GLFW_KEY_RIGHT)) dx += 1;
-                if (renderer.keyDown(GLFW_KEY_A) || renderer.keyDown(GLFW_KEY_LEFT)) dx -= 1;
-                if (renderer.keyDown(GLFW_KEY_S) || renderer.keyDown(GLFW_KEY_DOWN)) dy += 1;
-                if (renderer.keyDown(GLFW_KEY_W) || renderer.keyDown(GLFW_KEY_UP)) dy -= 1;
-                if (renderer.keyDown(GLFW_KEY_J)) actions |= Input.PRIMARY;
-                if (renderer.keyDown(GLFW_KEY_K)) actions |= Input.SECONDARY;
-                if (renderer.keyDown(GLFW_KEY_L)) actions |= Input.INTERACT;
-                if (renderer.keyDown(GLFW_KEY_I)) actions |= Input.INVENTORY;
+                if (renderer.keyDown(LwjglRenderer.KEY_D) || renderer.keyDown(LwjglRenderer.KEY_RIGHT)) dx += 1;
+                if (renderer.keyDown(LwjglRenderer.KEY_A) || renderer.keyDown(LwjglRenderer.KEY_LEFT)) dx -= 1;
+                if (renderer.keyDown(LwjglRenderer.KEY_S) || renderer.keyDown(LwjglRenderer.KEY_DOWN)) dy += 1;
+                if (renderer.keyDown(LwjglRenderer.KEY_W) || renderer.keyDown(LwjglRenderer.KEY_UP)) dy -= 1;
+                if (renderer.keyDown(LwjglRenderer.KEY_J)) actions |= Input.PRIMARY;
+                if (renderer.keyDown(LwjglRenderer.KEY_K)) actions |= Input.SECONDARY;
+                if (renderer.keyDown(LwjglRenderer.KEY_L)) actions |= Input.INTERACT;
+                if (renderer.keyDown(LwjglRenderer.KEY_I)) actions |= Input.INVENTORY;
                 session.input(dx, dy, actions);
 
                 // ── Zoom: +/- keys ───────────────────────────────
-                if (renderer.keyDown(GLFW_KEY_EQUAL) || renderer.keyDown(GLFW_KEY_KP_ADD))
+                if (renderer.keyDown(LwjglRenderer.KEY_EQUAL) || renderer.keyDown(LwjglRenderer.KEY_KP_ADD))
                     renderer.setZoom(renderer.zoom() * 1.02);
-                if (renderer.keyDown(GLFW_KEY_MINUS) || renderer.keyDown(GLFW_KEY_KP_SUBTRACT))
+                if (renderer.keyDown(LwjglRenderer.KEY_MINUS) || renderer.keyDown(LwjglRenderer.KEY_KP_SUBTRACT))
                     renderer.setZoom(renderer.zoom() / 1.02);
 
                 // ── Auto-fit map into view once ──────────────────

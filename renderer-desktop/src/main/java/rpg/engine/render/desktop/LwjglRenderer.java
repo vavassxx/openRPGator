@@ -24,6 +24,12 @@ public final class LwjglRenderer implements Renderer {
     private static final int TILE_HW = 16;
     private static final int TILE_HH = 8;
 
+    public static final int KEY_W = GLFW_KEY_W, KEY_A = GLFW_KEY_A, KEY_S = GLFW_KEY_S, KEY_D = GLFW_KEY_D;
+    public static final int KEY_UP = GLFW_KEY_UP, KEY_DOWN = GLFW_KEY_DOWN, KEY_LEFT = GLFW_KEY_LEFT, KEY_RIGHT = GLFW_KEY_RIGHT;
+    public static final int KEY_J = GLFW_KEY_J, KEY_K = GLFW_KEY_K, KEY_L = GLFW_KEY_L, KEY_I = GLFW_KEY_I;
+    public static final int KEY_EQUAL = GLFW_KEY_EQUAL, KEY_MINUS = GLFW_KEY_MINUS;
+    public static final int KEY_KP_ADD = GLFW_KEY_KP_ADD, KEY_KP_SUBTRACT = GLFW_KEY_KP_SUBTRACT;
+
     private long window;
     private int fbw = 1280, fbh = 720;
 
