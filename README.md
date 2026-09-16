@@ -11,7 +11,7 @@ Java 21, server-authoritative, 2.5D/isometric RPG engine targeting Linux/Windows
 - LuaJ scripting runtime and engine API
 - Lua-driven entity and world events
 - TCP server with length-framed JSON-free binary protocol
-- headless server runnable as a plain JAR on JVM/Termux
+- headless server runnable as a plain JAR on JVM
 - desktop map editor (grid canvas, tile/collision painting, entity placement with sprite previews,
   Lua script editor tab, undo/redo) and standalone script editor
 - Swing admin console for the dedicated server (`server-admin`)
@@ -72,7 +72,6 @@ A fully scripted test host (NPCs, dialogues, triggers, teleports, patrols) lives
 
 The core/server modules do not depend on LWJGL, AWT, Android or native libraries.
 
-
 ## Automated builds
 
 Every push runs `.github/workflows/build.yml`. It produces:
@@ -80,7 +79,6 @@ Every push runs `.github/workflows/build.yml`. It produces:
 - `openRPGator-linux-x86_64.tar.gz` — server, server-admin, Swing map editor and desktop client with x86_64 LWJGL natives.
 - `openRPGator-linux-arm64.tar.gz` — server, server-admin, Swing map editor and desktop client with ARM64 LWJGL natives.
 - `openRPGator-map-editor-universal.apk` — the Android-native `.rmap` map editor as a universal APK.
-
 The Android application is currently the map editor; there is not yet a separate Android client or Android server application. The JVM server itself is headless and can run directly under Termux on ARM64.
 
 ## License
