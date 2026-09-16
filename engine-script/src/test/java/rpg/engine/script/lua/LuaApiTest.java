@@ -7,11 +7,13 @@ import rpg.engine.core.component.Trigger;
 import rpg.engine.core.ecs.EntityId;
 import rpg.engine.core.math.WorldPosition;
 import rpg.engine.map.*;
+import rpg.engine.script.UiSink;
 import rpg.engine.world.GameWorld;
 import rpg.engine.world.TriggerEnterEvent;
 import rpg.engine.world.TriggerExitEvent;
 import org.luaj.vm2.*;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -170,5 +172,53 @@ class LuaApiTest {
                 List.of(new TileLayer("g", 8, 8, new int[64], false)),
                 List.of());
         scripts.bindMap(map);
+    }
+
+    // ── push UI: engine.notify / engine.dialog ────────────────────
+    private static final class RecordingSink implements UiSink {
+        final List<String> broadcasts = new ArrayList<>();
+        final List<DialogCall> dialogs = new ArrayList<>();
+
+        record DialogCall(long dialogId, long playerId, String text, List<String> choices, DialogCallback cb) {}
+
+        @Override public void broadcastNotify(String text) { broadcasts.add(text); }
+        @Override public void notifyTo(long playerEntityId, String text) {}
+        @Override public void dialogTo(long playerEntityId, long dialogId, String text, List<String> choices, DialogCallback callback) {
+            dialogs.add(new DialogCall(dialogId, playerEntityId, text, choices, callback));
+        }
+        @Override public void clearDialogs(long playerEntityId) {}
+    }
+
+    @Test
+    void notifyBroadcasts() {
+        RecordingSink sink = new RecordingSink();
+        api.setUiSink(sink);
+        scripts.execute("engine.notify('hello world')", "notify_test");
+        assertEquals(List.of("hello world"), sink.broadcasts);
+    }
+
+    @Test
+    void dialogRegistersCallbackAndResponds() {
+        RecordingSink sink = new RecordingSink();
+        api.setUiSink(sink);
+        EntityId player = world.spawn();
+        world.entities().set(player, new Name("player"));
+        world.entities().set(player, new Transform(new WorldPosition(0, 0, 0), 0));
+        scripts.execute(
+                "answer = -1; engine.dialog(world.get('player'), 'choose', {'a','b'}, function(idx) answer = idx end)",
+                "dialog_test");
+        assertEquals(1, sink.dialogs.size());
+        var d = sink.dialogs.get(0);
+        assertEquals(player.value(), d.playerId());
+        assertEquals("choose", d.text());
+        assertEquals(List.of("a", "b"), d.choices());
+        d.cb().onAnswer(1);
+        assertEquals(2, globals.get("answer").toint());
+    }
+
+    @Test
+    void dialogWithoutSinkIsNoop() {
+        scripts.execute("engine.dialog(world.get('nosuch'), 'choose', {'a'}, function() end)", "dialog_noop");
+        assertTrue(true);
     }
 }

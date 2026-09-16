@@ -3,20 +3,30 @@ package rpg.engine.runtime;
 import rpg.engine.map.*;
 import rpg.engine.world.GameWorld;
 import rpg.engine.script.lua.LuaRuntime;
+import rpg.engine.script.UiSink;
 import rpg.engine.core.ecs.EntityId;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import org.luaj.vm2.LuaError;
 
 public final class GameRuntime {
     private final GameWorld world = new GameWorld();
     private final LuaRuntime scripts = new LuaRuntime();
+    private final ConcurrentLinkedQueue<Runnable> pendingActions = new ConcurrentLinkedQueue<>();
     private RMap map;
     { scripts.bindWorld(world); }
     public GameWorld world() { return world; }
     public LuaRuntime scripts() { return scripts; }
     public RMap map() { return map; }
+
+    public void setUiSink(UiSink sink) { scripts.api().setUiSink(sink); }
+
+    /** Thread-safe: queues a dialog response to be delivered on the next tick. */
+    public void respondDialog(long dialogId, int choice) {
+        pendingActions.add(() -> scripts.api().respondDialog(dialogId, choice));
+    }
 
     public void loadMap(Path path) throws IOException {
         RMap m = RMapIO.read(path);
@@ -43,6 +53,8 @@ public final class GameRuntime {
     public void executeScript(String source, String name) { scripts.execute(source, name); }
 
     public void tick() {
+        Runnable t;
+        while ((t = pendingActions.poll()) != null) t.run();
         world.step();
         scripts.api().setTick(world.tick());
         scripts.tickDispatch();

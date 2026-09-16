@@ -9,24 +9,30 @@ import rpg.engine.core.ecs.EntityId;
 import rpg.engine.core.component.Name;
 import rpg.engine.core.math.WorldPosition;
 import rpg.engine.map.RMap;
+import rpg.engine.script.UiSink;
 import rpg.engine.world.GameWorld;
 import rpg.engine.world.TriggerEnterEvent;
 import rpg.engine.world.TriggerExitEvent;
 import rpg.engine.world.InteractRequestedEvent;
 
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Public, engine-facing Lua API v0.5. Lua sees stable facades rather than ECS internals.
  *
  * Beyond the read/write world surface (spawn/find/all/get_near/tile), scripts can register
  * persistent handlers — {@code engine.on_tick} and per-entity {@code on_tick/on_enter/on_exit/on_interact} —
- * which the engine dispatches each tick or on trigger/interact events.
+ * which the engine dispatches each tick or on trigger/interact events. Push UI (toast
+ * notifications and choice dialogs) is routed through an optional {@link UiSink} installed by
+ * the embedding server.
  */
 public final class LuaApi {
     private volatile GameWorld world;
     private volatile RMap map;
     private volatile long tick;
+    private volatile UiSink uiSink;
     private String version = "0.4.0";
 
     private final Map<EntityId, List<LuaFunction>> tickHandlers = new LinkedHashMap<>();
@@ -34,6 +40,9 @@ public final class LuaApi {
     private final Map<EntityId, List<LuaFunction>> exitHandlers = new LinkedHashMap<>();
     private final Map<EntityId, List<LuaFunction>> interactHandlers = new LinkedHashMap<>();
     private final List<LuaFunction> globalTickHandlers = new ArrayList<>();
+
+    private final AtomicLong dialogIds = new AtomicLong();
+    private final Map<Long, LuaFunction> dialogCallbacks = new ConcurrentHashMap<>();
 
     public void bindWorld(GameWorld world) {
         this.world = world;
@@ -44,6 +53,7 @@ public final class LuaApi {
     public void bindMap(RMap map) { this.map = map; }
     public void setTick(long tick) { this.tick = tick; }
     public void setVersion(String version) { this.version = version; }
+    public void setUiSink(UiSink sink) { this.uiSink = sink; }
 
     public void install(Globals globals) {
         LuaTable engine = new LuaTable();
@@ -51,6 +61,30 @@ public final class LuaApi {
         engine.set("tick", new ZeroArgFunction() { public LuaValue call() { return valueOf(tick); }});
         engine.set("log", new OneArgFunction() { public LuaValue call(LuaValue value) { System.out.println("[Lua] " + value.tojstring()); return NONE; }});
         engine.set("on_tick", new OneArgFunction() { public LuaValue call(LuaValue fn) { register(globalTickHandlers, null, fn); return NONE; }});
+        engine.set("notify", new OneArgFunction() {
+            public LuaValue call(LuaValue text) {
+                if (uiSink != null) uiSink.broadcastNotify(text.optjstring(""));
+                return NONE;
+            }
+        });
+        engine.set("dialog", new ArgsLib() {
+            public LuaValue callImpl(Varargs args) {
+                LuaValue target = args.arg(1);
+                String text = args.arg(2).tojstring();
+                LuaValue choicesTable = args.arg(3);
+                LuaValue callback = args.arg(4);
+                if (uiSink != null) {
+                    long targetId = targetIdOf(target);
+                    if (targetId == -1) return NONE;
+                    long dialogId = dialogIds.incrementAndGet();
+                    if (callback.isfunction()) dialogCallbacks.put(dialogId, callback.checkfunction());
+                    List<String> choices = new ArrayList<>();
+                    for (int i = 1; i <= choicesTable.length(); i++) choices.add(choicesTable.get(i).tojstring());
+                    uiSink.dialogTo(targetId, dialogId, text, choices, choice -> respondDialog(dialogId, choice));
+                }
+                return NONE;
+            }
+        });
         globals.set("engine", engine);
 
         LuaTable worldApi = new LuaTable();
@@ -137,6 +171,13 @@ public final class LuaApi {
         }
     }
 
+    /** Invoked (via the UiSink) when a client answers the dialog; must run on the tick thread. */
+    public void respondDialog(long dialogId, int choice) {
+        LuaFunction fn = dialogCallbacks.remove(dialogId);
+        if (fn == null) return;
+        safeCall("dialog", fn, valueOf(choice + 1));
+    }
+
     // ── World operations ──────────────────────────────────────────
     private int count() { return world == null ? 0 : world.entities().entities().size(); }
 
@@ -191,6 +232,18 @@ public final class LuaApi {
     private EntityId parseId(String raw) {
         try { return new EntityId(Long.parseLong(raw.trim())); } catch (Exception ignored) { }
         return findId(raw);
+    }
+
+    /** Extracts the entity id from a facade table (calls {@code facade.id()}) or a raw number. */
+    private long targetIdOf(LuaValue target) {
+        if (target.istable()) {
+            LuaValue idFn = target.get("id");
+            if (idFn.isfunction()) {
+                try { return idFn.invoke().arg1().tolong(); } catch (LuaError ignored) { }
+            }
+            return -1;
+        }
+        return target.isnumber() ? target.tolong() : -1;
     }
 
     private EntityId findId(String name) {

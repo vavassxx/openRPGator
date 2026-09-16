@@ -14,6 +14,10 @@ No sandbox is applied — `JsePlatform.standardGlobals()` is used by default. Ho
 | `engine.tick`        | number   | Current world tick (updated per step)|
 | `engine.log(msg)`    | —        | Prints `[Lua] msg` to stdout         |
 | `engine.on_tick(fn)` | —        | Register a global tick handler (arg = tick number) |
+| `engine.notify(msg)` | —        | Broadcast a toast notification to all connected players (`UiSink.broadcastNotify`) |
+| `engine.dialog(player, text, {choice,...}, fn(idx))` | — | Open a modal choice dialog for one player; `fn` fires with the 1-based choice on answer |
+
+Dialogs require the embedding server to install a `UiSink`; without one both calls are no-ops. `player` is an entity facade (e.g. `world.get('id')`) or a raw entity id.
 
 ---
 
@@ -102,4 +106,4 @@ Scripts execute once at load time and register persistent handlers. `dispatchTic
 
 ## Desktop / Android
 
-Scripts are loaded client-side only when `GameRuntime.loadMap()` is called by the desktop client. Android's `LocalServerBackend` does **not** currently use `GameRuntime` and therefore does not run Lua. Client-side UI for dialogs and notifications is planned for a future iteration.
+Scripts are loaded client-side only when `GameRuntime.loadMap()` is called by the desktop client (`desktop-client` installs a `UiSink` so `engine.notify`/`engine.dialog` route to the local socket). Android's `LocalServerBackend` does **not** currently use `GameRuntime` and therefore does not run Lua. Client-side UI for dialogs and notifications is planned for a future iteration.

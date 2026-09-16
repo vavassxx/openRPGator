@@ -6,13 +6,15 @@ import java.util.concurrent.*;
 import rpg.engine.network.*;
 
 /**
- * Blocking-IO TCP client that connects to a server, receives snapshots and sends input.
- * Mirrors android-client/ClientSession.
+ * Blocking-IO TCP client that connects to a server, receives snapshots
+ * and push UI events (notify / dialog) and sends input and dialog responses.
  */
 final class DesktopClientSession {
     interface Listener {
         void onConnected(Welcome w);
         void onSnapshot(Snapshot s);
+        void onNotify(Notify n);
+        void onDialog(Dialog d);
         void onStatus(String s);
     }
 
@@ -38,7 +40,12 @@ final class DesktopClientSession {
                 listener.onConnected(w);
                 while (!s.isClosed()) {
                     Packet q = Protocol.read(s.getInputStream());
-                    if (q instanceof Snapshot snap) listener.onSnapshot(snap);
+                    switch (q) {
+                        case Snapshot snap -> listener.onSnapshot(snap);
+                        case Notify n -> listener.onNotify(n);
+                        case Dialog d -> listener.onDialog(d);
+                        default -> {}
+                    }
                 }
             } catch (IOException e) {
                 listener.onStatus("Disconnected: " + e.getMessage());
@@ -59,8 +66,18 @@ final class DesktopClientSession {
         }
     }
 
+    void dialogResponse(long dialogId, int choice) {
+        try {
+            synchronized (lock) {
+                if (out != null) Protocol.write(out, new DialogResponse(dialogId, choice));
+            }
+        } catch (IOException e) {
+            listener.onStatus("Send failed: " + e.getMessage());
+        }
+    }
+
     void disconnect() {
-        try { Socket s = socket; if (s != null) s.close(); } catch (IOException ignored) { }
+        try { Socket s = socket; if (s != null) s.close(); } catch (IOException ignored) {}
         socket = null;
         out = null;
     }

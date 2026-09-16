@@ -27,7 +27,7 @@ Not yet production-complete:
 - packaging/signing for each desktop target
 - sandbox policy (full LuaJ access by design; host responsibility per project policy)
 - persistence/database layer and account/auth system
-- client-side dialogs and server→client notifications (network packets + UI rendering)
+- client-side dialogs and server→client notifications (network packets + UI rendering) — **network side done**: `engine.notify`/`engine.dialog` via `UiSink` (dedicated-server + desktop local server install it), `Notify`/`Dialog`/`DialogResponse` packets; desktop client toast/choice UI rendering still pending
 
 The architecture deliberately keeps these as subsequent layers rather than faking them with placeholder implementations.
 
@@ -65,6 +65,7 @@ The scripting API has been substantially expanded (see `SCRIPTING.md` for the fu
 - **Entity `self` binding:** scripts attached to a map entity execute with `entity` / `self` global bound to their owning entity facade. `world.get(id)` now also accepts a name string (fallback lookup by `Name` component).
 - **Trigger system (engine-world):** `Trigger` component with automatic `TriggerEnterEvent` / `TriggerExitEvent` emission via `TriggerSystem`. Interact via `Input.INTERACT` emits `InteractRequestedEvent` for the nearest trigger entity.
 - **Relative script paths:** map-relative paths are resolved against the `.rmap` file's parent directory (not CWD).
+- **Push UI (`engine.notify` / `engine.dialog`):** Lua can broadcast toasts or open choice dialogs for a specific player via the `UiSink` interface. The dedicated server and desktop local server install a network-backed sink (`Notify`, `Dialog`, `DialogResponse` packets); `dialog` callbacks run on the Lua tick thread after the client answers.
 - **Resilient error handling:** per-handler LuaError is caught and logged per-handler during tick; per-script errors during `loadMap` are logged without crashing the server.
 
 No sandbox is applied. `JsePlatform.standardGlobals()` is the default. Host operators own their scripts.
