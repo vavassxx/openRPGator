@@ -2,6 +2,7 @@ package rpg.engine.script.lua;
 
 import org.luaj.vm2.*;
 import org.luaj.vm2.lib.*;
+import static org.luaj.vm2.LuaValue.*;
 import rpg.engine.core.component.Transform;
 import rpg.engine.core.component.Trigger;
 import rpg.engine.core.ecs.EntityId;
