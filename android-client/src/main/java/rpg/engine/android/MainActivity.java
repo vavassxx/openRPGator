@@ -417,7 +417,7 @@ public final class MainActivity extends Activity implements ClientSession.Listen
                 | Intent.FLAG_GRANT_WRITE_URI_PERMISSION
                 | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
         if (preferAppRoot && Build.VERSION.SDK_INT >= 26) {
-            Uri rootUri = DocumentsContract.buildDocumentUri(
+            Uri rootUri = DocumentsContract.buildTreeDocumentUri(
                     "rpg.engine.android.documents", "openrpgator");
             i.putExtra(DocumentsContract.EXTRA_INITIAL_URI, rootUri);
         }
