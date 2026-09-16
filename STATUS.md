@@ -25,8 +25,9 @@ Not yet production-complete:
 - advanced editor tooling (painting/entity inspector/undo/redo)
 - complete Android touch UI and Android server foreground-service wrapper
 - packaging/signing for each desktop target
-- expanded Lua API, sandbox policy and script tooling
+- sandbox policy (full LuaJ access by design; host responsibility per project policy)
 - persistence/database layer and account/auth system
+- client-side dialogs and server→client notifications (network packets + UI rendering)
 
 The architecture deliberately keeps these as subsequent layers rather than faking them with placeholder implementations.
 
@@ -53,3 +54,28 @@ The Android client now uses a semantic, user-editable control layer. Gameplay re
 The Android client now contains a Java-17-compatible embedded TCP backend. Use **Local server** to start it on the selected port, then press **Connect** with host `127.0.0.1`. The backend supports Hello/Welcome/Input/Snapshot and multiple local clients, and is stopped with the same button or when the activity closes.
 
 - Android settings now allow selecting a persistent application data folder through Storage Access Framework.
+
+## Lua scripting API 0.4.0
+
+The scripting API has been substantially expanded (see `SCRIPTING.md` for the full reference):
+
+- **Tick / event dispatch:** global `engine.on_tick(fn)` and per-entity `entity.on_tick(fn)`, `on_enter`, `on_exit`, `on_interact` — all dispatched every tick or on trigger/interact events.
+- **World observation:** `world.all()`, `world.find(name)`, `world.get_near(x,y,r)`, `world.size()`.
+- **Tile access:** `world.tile(x,y[,layer])` and `world.set_tile(x,y,id[,layer])` — read/write map tiles from Lua.
+- **Entity `self` binding:** scripts attached to a map entity execute with `entity` / `self` global bound to their owning entity facade. `world.get(id)` now also accepts a name string (fallback lookup by `Name` component).
+- **Trigger system (engine-world):** `Trigger` component with automatic `TriggerEnterEvent` / `TriggerExitEvent` emission via `TriggerSystem`. Interact via `Input.INTERACT` emits `InteractRequestedEvent` for the nearest trigger entity.
+- **Relative script paths:** map-relative paths are resolved against the `.rmap` file's parent directory (not CWD).
+- **Resilient error handling:** per-handler LuaError is caught and logged per-handler during tick; per-script errors during `loadMap` are logged without crashing the server.
+
+No sandbox is applied. `JsePlatform.standardGlobals()` is the default. Host operators own their scripts.
+
+## Пометка основному кодеру: модель .pak для клиентских ассетов
+
+В будущем клиентский рендер (диалоги, UI-элементы, текстуры) должен перейти на модель **`.pak`-ассетов**:
+
+- На сервере хранится `.pak`-архив с текстурами, шрифтами, UI-layout'ами, анимациями и прочими визуальными ресурсами.
+- При подключении клиента сервер стримует `.pak` клиенту.
+- Клиент поднимает ресурсы из `.pak` и передаёт их в распоряжение серверных скриптов — скрипт решает, *что* показать, а рендер дёргает ресурсы из уже загруженного `.pak`.
+- Это отвязывает серверные скрипты от хардкоженных текстур/глифов на клиенте и позволяет обновлять визуал без пересборки клиента.
+
+Для первой итерации (текущей) на десктопе используется встроенный bitmap-шрифт 5×7 в GL — это минимально sufficient до появления `.pak`-пайплайна.
