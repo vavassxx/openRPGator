@@ -61,21 +61,21 @@ public final class LuaApi {
         worldApi.set("get", new OneArgFunction() { public LuaValue call(LuaValue id) { EntityId e = parseId(id.tojstring()); return e == null ? NIL : entityFacade(e); }});
         worldApi.set("find", new OneArgFunction() { public LuaValue call(LuaValue name) { return find(name.tojstring()); }});
         worldApi.set("all", new ZeroArgFunction() { public LuaValue call() { return allEntities(); }});
-        worldApi.set("get_near", new VarArgFunction() {
-            public LuaValue call(Varargs args) {
+        worldApi.set("get_near", new ArgsLib() {
+            public LuaValue callImpl(Varargs args) {
                 double x = args.arg1().todouble(), y = args.arg(2).todouble(), r = args.narg() >= 3 ? args.arg(3).todouble() : 1.0;
                 return nearEntities(x, y, r);
             }
         });
-        worldApi.set("tile", new VarArgFunction() {
-            public LuaValue call(Varargs args) {
+        worldApi.set("tile", new ArgsLib() {
+            public LuaValue callImpl(Varargs args) {
                 int x = args.arg(1).checkint(), y = args.arg(2).checkint();
                 int layer = args.narg() >= 3 ? args.arg(3).checkint() : 0;
                 return valueOf(tileAt(x, y, layer));
             }
         });
-        worldApi.set("set_tile", new VarArgFunction() {
-            public LuaValue call(Varargs args) {
+        worldApi.set("set_tile", new ArgsLib() {
+            public LuaValue callImpl(Varargs args) {
                 int x = args.arg(1).checkint(), y = args.arg(2).checkint();
                 int id = args.arg(3).checkint();
                 int layer = args.narg() >= 4 ? args.arg(4).checkint() : 0;
@@ -257,5 +257,18 @@ public final class LuaApi {
     private void register(Map<EntityId, List<LuaFunction>> into, EntityId id, LuaValue fn) {
         if (id == null || !fn.isfunction()) return;
         into.computeIfAbsent(id, k -> new ArrayList<>()).add((LuaFunction) fn);
+    }
+
+    /**
+     * LuaJ 3.0.1 quirk: {@link VarArgFunction#invoke} calls {@code onInvoke}, whose default
+     * implementation calls {@code invoke} again — infinite recursion unless {@code onInvoke}
+     * is overridden. Subclasses implement {@link #call(Varargs)} (the old contract); the
+     * bridging here forwards {@code onInvoke} args to it so Lua-side calls land correctly.
+     */
+    private abstract static class ArgsLib extends VarArgFunction {
+        abstract LuaValue callImpl(Varargs args);
+        @Override public Varargs onInvoke(Varargs args) {
+            return callImpl(args);
+        }
     }
 }

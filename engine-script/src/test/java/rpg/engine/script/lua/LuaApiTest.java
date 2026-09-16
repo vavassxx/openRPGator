@@ -82,7 +82,11 @@ class LuaApiTest {
     // ── per-entity on_tick ─────────────────────────────────────────
     @Test
     void entityOnTickDispatch() {
-        scripts.execute("count = 0; entity.on_tick(function(me) count = count + 1 end)", "etick");
+        EntityId id = world.spawn();
+        world.entities().set(id, new Name("ticker"));
+        world.entities().set(id, new Transform(new WorldPosition(0, 0, 0), 0));
+        api.executeOwned(globals,
+                "count = 0; entity.on_tick(function(me) count = count + 1 end)", "etick", id);
         for (int i = 0; i < 5; i++) { api.setTick(i); api.dispatchTick(); }
         assertEquals(5, globals.get("count").toint());
     }
