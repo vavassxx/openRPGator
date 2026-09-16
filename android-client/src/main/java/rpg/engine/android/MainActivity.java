@@ -12,7 +12,10 @@ import java.util.*;
 import java.io.File;
 import java.nio.file.Path;
 import rpg.engine.android.controls.*;
-import rpg.engine.network.*;
+import rpg.engine.network.Input;
+import rpg.engine.network.Snapshot;
+import rpg.engine.network.Welcome;
+import rpg.engine.network.Dialog;
 
 public final class MainActivity extends Activity implements ClientSession.Listener {
     private ControlLayout controls;

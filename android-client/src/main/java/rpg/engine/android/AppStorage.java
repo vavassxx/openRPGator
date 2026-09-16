@@ -4,6 +4,7 @@ import android.content.Context;
 import android.net.Uri;
 
 import java.io.*;
+import java.util.Arrays;
 
 /**
  * App-specific external storage. The app data root is {@link Context#getExternalFilesDir}
