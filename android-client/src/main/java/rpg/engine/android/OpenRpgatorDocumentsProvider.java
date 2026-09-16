@@ -7,6 +7,7 @@ import android.os.ParcelFileDescriptor;
 import android.provider.DocumentsContract;
 import android.provider.DocumentsProvider;
 import android.provider.DocumentsContract.Document;
+import android.provider.DocumentsContract.Root;
 import java.io.File;
 import java.io.FileNotFoundException;
 
@@ -15,9 +16,9 @@ public final class OpenRpgatorDocumentsProvider extends DocumentsProvider {
     private static final String ROOT_ID="openrpgator";
     @Override public boolean onCreate(){ root=new AppStorage(getContext()).rootFile(); return true; }
     @Override public Cursor queryRoots(String[] projection){
-        MatrixCursor c=new MatrixCursor(projection==null?new String[]{Document.COLUMN_ROOT_ID,Document.COLUMN_DOCUMENT_ID,Document.COLUMN_TITLE,Document.COLUMN_FLAGS,Document.COLUMN_MIME_TYPES}:projection);
+        MatrixCursor c=new MatrixCursor(projection==null?new String[]{Root.COLUMN_ROOT_ID,Document.COLUMN_DOCUMENT_ID,Root.COLUMN_TITLE,Document.COLUMN_FLAGS,Root.COLUMN_MIME_TYPES}:projection);
         MatrixCursor.RowBuilder r=c.newRow();
-        r.add(Document.COLUMN_ROOT_ID,ROOT_ID).add(Document.COLUMN_DOCUMENT_ID,ROOT_ID).add(Document.COLUMN_TITLE,"openRPGator").add(Document.COLUMN_FLAGS,Document.FLAG_SUPPORTS_CREATE|Document.FLAG_LOCAL_ONLY).add(Document.COLUMN_MIME_TYPES,"*/*");
+        r.add(Root.COLUMN_ROOT_ID,ROOT_ID).add(Document.COLUMN_DOCUMENT_ID,ROOT_ID).add(Root.COLUMN_TITLE,"openRPGator").add(Document.COLUMN_FLAGS,Root.FLAG_SUPPORTS_CREATE|Root.FLAG_LOCAL_ONLY).add(Root.COLUMN_MIME_TYPES,"*/*");
         return c;
     }
     @Override public Cursor queryDocument(String id,String[] projection)throws FileNotFoundException{return queryFile(id,projection);}
