@@ -7,6 +7,7 @@ import rpg.engine.map.RMapIO;
 import rpg.engine.map.TileLayer;
 import rpg.engine.network.*;
 import rpg.engine.core.component.Transform;
+import rpg.engine.core.io.DataDir;
 import rpg.engine.pak.PakAssets;
 
 import java.io.*;
@@ -158,6 +159,7 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
             mapPath = Path.of(savedMap);
         String savedRes = cfg.getProperty("resources");
         if (savedRes != null && !savedRes.isBlank()) resourceDir = Path.of(savedRes);
+        if (resourceDir == null && Files.isDirectory(DataDir.paks())) resourceDir = DataDir.paks();
         String savedConnect = cfg.getProperty("connect");
         if (savedConnect != null && connectHost.equals(DEFAULT_HOST)) connectTo(savedConnect);
     }
@@ -218,6 +220,15 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
 
     private void startLocalServer() {
         try {
+            if (mapPath == null && Files.isDirectory(DataDir.maps())) {
+                List<Path> maps = DataDir.mapFiles();
+                if (maps.size() == 1) {
+                    mapPath = maps.get(0);
+                    addToast("Using map: " + mapPath.getFileName());
+                } else if (maps.size() > 1) {
+                    addToast("Multiple maps in data dir — pick one in Settings");
+                }
+            }
             if (localServer == null) localServer = new DesktopLocalServer();
             localServer.setResourceDir(resourceDir);
             localServer.start(localPort);

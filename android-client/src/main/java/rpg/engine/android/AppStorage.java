@@ -46,22 +46,42 @@ public final class AppStorage {
                 OpenRpgatorDocumentsProvider.AUTHORITY, rootFile().getAbsolutePath());
     }
 
+    // ── Data dir (shared layout: data/maps, data/paks) ──────────
+    public File dataDir(){
+        File d = new File(rootFile(), "data");
+        if(!d.exists()) d.mkdirs();
+        return d;
+    }
+    public File paksDir(){
+        File d = new File(dataDir(), "paks");
+        if(!d.exists()) d.mkdirs();
+        return d;
+    }
+
     // ── Logs ─────────────────────────────────────────────────────
     public File privateLogFile(String name){ File d=new File(rootFile(),"logs"); d.mkdirs(); return new File(d,name); }
     public OutputStream createLog(String name) throws IOException { return new FileOutputStream(privateLogFile(name),true); }
 
     // ── Maps ─────────────────────────────────────────────────────
-    public void saveMap(String name, byte[] data) throws IOException { File d=new File(rootFile(),"maps"); if(!d.exists()&&!d.mkdirs()) throw new IOException("Could not create maps directory"); try(FileOutputStream out=new FileOutputStream(new File(d,safeName(name)))){out.write(data);} }
-    public byte[] loadMap(String name) throws IOException { File f=new File(new File(rootFile(),"maps"),safeName(name)); if(!f.isFile()) return null; try(InputStream in=new FileInputStream(f)){return readAll(in);} }
-    public File mapFile(String name) { return new File(new File(rootFile(),"maps"), safeName(name)); }
+    private File mapsDir(){ File d = new File(dataDir(), "maps"); if(!d.exists()) d.mkdirs(); return d; }
+    public void saveMap(String name, byte[] data) throws IOException { try(FileOutputStream out=new FileOutputStream(new File(mapsDir(),safeName(name)))){out.write(data);} }
+    public byte[] loadMap(String name) throws IOException { File f=new File(mapsDir(),safeName(name)); if(!f.isFile()) return null; try(InputStream in=new FileInputStream(f)){return readAll(in);} }
+    public File mapFile(String name) { return new File(mapsDir(), safeName(name)); }
     public String[] mapNames() {
-        File d = new File(rootFile(), "maps");
-        File[] files = d.listFiles((dir, n) -> n.endsWith(".rmap"));
+        File[] files = mapsDir().listFiles((dir, n) -> n.endsWith(".rmap"));
         if (files == null || files.length == 0) return new String[0];
         Arrays.sort(files, (a, b) -> a.getName().compareToIgnoreCase(b.getName()));
         String[] names = new String[files.length];
         for (int i = 0; i < files.length; i++) names[i] = files[i].getName();
         return names;
+    }
+
+    /** Sorted {@code *.pak} files from {@code data/paks} (same shared layout as desktop). */
+    public File[] pakFiles() {
+        File[] files = paksDir().listFiles((dir, n) -> n.endsWith(".pak"));
+        if (files == null || files.length == 0) return new File[0];
+        Arrays.sort(files, (a, b) -> a.getName().compareToIgnoreCase(b.getName()));
+        return files;
     }
 
     private static String safeName(String n){return n==null||n.trim().isEmpty()?"map.rmap":n.replaceAll("[\\\\/:*?\"<>|]","_");}

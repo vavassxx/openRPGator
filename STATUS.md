@@ -14,15 +14,16 @@ Implemented:
 - server JAR entry point suitable for JVM on Linux/Termux/Android ARM64
 - desktop OpenGL renderer implementation
 - desktop client executable
-- functional map editor for creating/loading/saving maps
-- functional Lua script editor
+- full map editor: tile/collision painting, entity placement with `.pak` sprite previews, entity
+  inspector (id/prefab/position/script), embedded Lua script editor, undo/redo
+- standalone Lua script editor (open/save + syntax check)
+- Swing admin console for the dedicated server (`server-admin`)
 - Android client module using OpenGL ES and the shared runtime
 - unit-test sources and smoke tests
 
 Not yet production-complete:
 - full texture atlas and animation system (single-frame `.pak` sprites/tiles work end-to-end)
 - prediction/interpolation and robust reconnect/authentication
-- advanced editor tooling (painting/entity inspector/undo/redo)
 - complete Android touch UI and Android server foreground-service wrapper
 - packaging/signing for each desktop target
 - sandbox policy (full LuaJ access by design; host responsibility per project policy)
@@ -32,15 +33,23 @@ The architecture deliberately keeps these as subsequent layers rather than fakin
 
 ## Android Map Editor 0.4.0
 - Android-native `.rmap` editor replaces the old Swing-only story for mobile workflows.
-- Open/create/save `.rmap` through Android Storage Access Framework.
+- Open/create/save `.rmap` through Storage Access Framework or the app data folder (`data/maps`).
 - Paint tiles, erase, collision editing and entity placement.
-- Pan the map by dragging; tile palette 0..9.
+- Pan the map by dragging; tile/sprites palette rebuilt per mode. Pak atlas loads from `data/paks`
+  (shared layout with desktop); tiles and entity sprites render as real textures, entities are
+  placed with an explicit prefab binding. Long-press an entity to edit its id/prefab/script or delete it.
 - `RMapIO` now supports `InputStream`/`OutputStream`, so Android does not need filesystem paths.
 - The Android app does not depend on LWJGL or the desktop renderer.
 
+## Server admin console (`server-admin`)
+- Swing window to run the dedicated server in-process: data dir browse/refresh, editable map combo,
+  pak list (directory or individual packs), port, Start/Stop, live log panel, map info.
+- Options are persisted to `~/.openrpgator/server.properties`; the started server uses the same
+  `ServerConfig`/`ServerHost` resolution as the CLI.
+
 
 ## CI packaging
-- GitHub Actions workflow builds Linux x86_64 and ARM64 distributions for the dedicated server, Swing map editor and desktop client.
+- GitHub Actions workflow builds Linux x86_64 and ARM64 distributions for the dedicated server, server-admin, Swing map editor and desktop client.
 - Desktop client distributions resolve architecture-specific LWJGL native artifacts.
 - Android map editor is assembled as a universal APK.
 - Android CI compiles the shared JVM libraries at Java 17 bytecode level while the full desktop/server build remains Java 21.
@@ -105,9 +114,13 @@ sprite/.pak pipeline, inventory/combat, persistence, smarter AI, Android guest c
   `Snapshot.EntityState.resource` маппится в `sprite/<n>`, `resource == -1` — в `sprite/player`.
   Тайлы рисуются текстурированным ромбом, спрайты — текстурированными билбордами; при отсутствии
   текстуры — цветной fallback.
-- **Маппинг ресурсов**: `rpg.engine.runtime.Sprites` хранит позицию id карты в алфавитно-отсортированном
-  списке `MapEntity`; dedicated-server, desktop local server и Android local server заполняют ресурс в снапшоте.
-- **Android-клиент**: `ClientSession` пропускает `PakList`/`PakChunk` до `Welcome` (растровое кэширование
-  и ассеты пока на десктопе).
+- **Маппинг ресурсов**: `rpg.engine.runtime.Sprites.byPrefab(map)` сопоставляет отсортированные
+  уникальные `prefab` сущностей с индексом спрайта; dedicated-server, desktop local server и Android
+  local server берут `Prefab`-компонент из мира (fallback — `Name`) и заполняют ресурс в снапшоте.
+  Редактор привязывает текстуру, проставляя prefab сущности равным ключу `sprite/*` из пака (в
+  десктоп и Android-редакторе рисуются реальные превью из `data/paks`).
+- **Android-клиент**: `ClientSession` пропускает `PakList`/`PakChunk` до `Welcome` (стриминг ассетов
+  по сети пока на десктопе); runtime-вью рисует спрайты сущностей из локальной папки `data/paks` по
+  `Snapshot.EntityState.resource()` (fallback-маркер и `sprite/player` для `resource == -1`).
 - **Пример**: `assets/basic.pak` — CC0-паки Kenney (изо-дungeon), `--pak assets/basic.pak` на сервере;
   скрипт сборки в README.

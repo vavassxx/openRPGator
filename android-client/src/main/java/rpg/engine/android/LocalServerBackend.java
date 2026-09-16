@@ -3,6 +3,7 @@ package rpg.engine.android;
 import rpg.engine.runtime.GameRuntime;
 import rpg.engine.runtime.Sprites;
 import rpg.engine.core.component.Name;
+import rpg.engine.core.component.Prefab;
 import rpg.engine.core.component.Transform;
 import rpg.engine.core.ecs.EntityId;
 import rpg.engine.core.math.WorldPosition;
@@ -49,7 +50,7 @@ final class LocalServerBackend {
         if (mapFile != null && Files.isRegularFile(mapFile)) {
             try {
                 runtime.loadMap(mapFile);
-                sprites = Sprites.byId(runtime.map());
+                sprites = Sprites.byPrefab(runtime.map());
                 listener.status("Local server listening on " + port + " (" + mapFile.getFileName() + ")");
             } catch (Exception e) {
                 listener.status("Local server: map load failed: " + e.getMessage());
@@ -152,9 +153,11 @@ final class LocalServerBackend {
                 .map(eid -> {
                     var t = rt.world().entities().get(eid, Transform.class).orElse(null);
                     if (t == null) return null;
-                    String name = rt.world().entities().get(eid, Name.class)
+                    String prefab = rt.world().entities().get(eid, Prefab.class)
+                            .map(Prefab::value).orElse(null);
+                    if (prefab == null) prefab = rt.world().entities().get(eid, Name.class)
                             .map(Name::value).orElse(null);
-                    int resource = Sprites.resourceOf(sprites, name);
+                    int resource = Sprites.resourceOf(sprites, prefab);
                     return new Snapshot.EntityState(eid.value(), t.position().x(),
                             t.position().y(), t.position().elevation(), resource);
                 })

@@ -517,7 +517,12 @@ public final class MainActivity extends Activity implements ClientSession.Listen
     final class GameView extends View {
         private Snapshot snapshot = new Snapshot(List.of());
         private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
-        GameView(Context c) { super(c); p.setTypeface(Typeface.create("sans", Typeface.NORMAL)); }
+        private final PakAtlas atlas = new PakAtlas();
+        GameView(Context c) {
+            super(c);
+            p.setTypeface(Typeface.create("sans", Typeface.NORMAL));
+            atlas.loadDir(appStorage.pakFiles());
+        }
         void setSnapshot(Snapshot s) { snapshot = s; invalidate(); }
         @Override protected void onDraw(Canvas c) {
             c.drawColor(Color.rgb(36, 48, 42));
@@ -531,7 +536,16 @@ public final class MainActivity extends Activity implements ClientSession.Listen
             for (Snapshot.EntityState e : snapshot.entities()) {
                 float sx = ox + (float)(e.x() - e.y()) * tile * .5f;
                 float sy = oy + (float)(e.x() + e.y()) * tile * .25f - (float)e.elevation() * 12;
-                p.setColor(Color.rgb(230, 180, 80)); c.drawCircle(sx, sy, 18, p);
+                Bitmap bmp = e.resource() < 0 ? atlas.playerSprite() : atlas.spriteImageAt(e.resource());
+                if (bmp != null) {
+                    float s = 40;
+                    float sc = Math.min(s / bmp.getWidth(), s / bmp.getHeight());
+                    int w = (int) (bmp.getWidth() * sc), h = (int) (bmp.getHeight() * sc);
+                    Rect dst = new Rect((int) (sx - w / 2f), (int) (sy - h / 2f), (int) (sx + w / 2f), (int) (sy + h / 2f));
+                    c.drawBitmap(bmp, null, dst, p);
+                } else {
+                    p.setColor(Color.rgb(230, 180, 80)); c.drawCircle(sx, sy, 18, p);
+                }
                 p.setColor(Color.BLACK); p.setTextSize(11); c.drawText(Long.toString(e.id()), sx - 7, sy + 4, p);
             }
             if (snapshot.entities().isEmpty()) {

@@ -1,3 +1,10 @@
 package rpg.engine.editor.map;
-import rpg.engine.map.*;import rpg.engine.core.math.*;import javax.swing.*;import java.awt.*;import java.nio.file.*;import java.util.List;
-public final class MapEditorMain {public static void main(String[]a){SwingUtilities.invokeLater(()->new MapEditor().show());}static final class MapEditor{final JFrame f=new JFrame("RPG Map Editor");final JTextField name=new JTextField("untitled",12),file=new JTextField("map.rmap",16);final JSpinner size=new JSpinner(new SpinnerNumberModel(32,1,512,1));void show(){f.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);var p=new JPanel();p.add(new JLabel("Name"));p.add(name);p.add(new JLabel("Size"));p.add(size);p.add(new JLabel("File"));p.add(file);var save=new JButton("Save");save.addActionListener(e->save());p.add(save);var load=new JButton("Load");load.addActionListener(e->load());p.add(load);f.add(p);f.pack();f.setLocationByPlatform(true);f.setVisible(true);}void save(){try{int n=(int)size.getValue();int[] tiles=new int[n*n];var map=new RMap(name.getText(),32,n,n,List.of(new TileLayer("ground",n,n,tiles,false)),List.of());RMapIO.write(map,Path.of(file.getText()));}catch(Exception e){JOptionPane.showMessageDialog(f,e.toString());}}void load(){try{var m=RMapIO.read(Path.of(file.getText()));name.setText(m.name());size.setValue(m.width());}catch(Exception e){JOptionPane.showMessageDialog(f,e.toString());}}}}
+
+import javax.swing.SwingUtilities;
+
+/** Entry point for the desktop map editor. */
+public final class MapEditorMain {
+    public static void main(String[] args) {
+        SwingUtilities.invokeLater(() -> new EditorFrame().setVisible(true));
+    }
+}

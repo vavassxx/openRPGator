@@ -37,10 +37,10 @@ final class DesktopLocalServer {
     void setResourceDir(Path dir) { this.resourceDir = dir; }
     Path resourceDir() { return resourceDir; }
 
-    /** Re-derives the entity-id → sprite mapping after {@code runtime().loadMap(...)}. */
+    /** Re-derives the prefab → sprite mapping after {@code runtime().loadMap(...)}. */
     void refreshSprites() {
         sprites = (runtime != null && runtime.map() != null)
-                ? Sprites.byId(runtime.map()) : Map.of();
+                ? Sprites.byPrefab(runtime.map()) : Map.of();
     }
 
     private List<Path> localPaks() {
@@ -151,7 +151,10 @@ final class DesktopLocalServer {
                     if (t == null) return null;
                     String name = rt.world().entities().get(eid, Name.class)
                             .map(Name::value).orElse(null);
-                    int resource = Sprites.resourceOf(sprites, name);
+                    String prefab = rt.world().entities().get(eid, Prefab.class)
+                            .map(Prefab::value).orElse(null);
+                    if (prefab == null) prefab = name;
+                    int resource = Sprites.resourceOf(sprites, prefab);
                     return new Snapshot.EntityState(eid.value(), t.position().x(),
                             t.position().y(), t.position().elevation(), resource);
                 })

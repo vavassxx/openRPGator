@@ -39,6 +39,8 @@ public final class PakAssets {
     public int totalSpriteBytes() { return totalSpriteBytes; }
     public PakImage[] tileImages() { return tiles; }
     public PakImage[] spriteImages() { return sprites; }
+    /** Sorted short keys of {@code sprite/*} entries (e.g. {@code player}), index == sprite id. */
+    public String[] spriteKeys() { return spriteKeys; }
     /** Index of the {@code sprite/player} entry (for entities with resource == -1), or -1. */
     public int playerSpriteIndex() { return playerSpriteIndex; }
 

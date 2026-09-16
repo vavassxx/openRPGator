@@ -14,6 +14,10 @@ final class ClientSession {
         void notify(String text);
         void dialog(Dialog d);
         void status(String s);
+        void pakStart(long totalBytes);            // total pak bytes expected (0 = none)
+        void pakProgress(long received, long totalBytes);
+        boolean pakCached(String name, long size); // true => skip buffering for this pak
+        void pakDone(String name, byte[] data);
     }
     private final Listener listener;
     private Socket socket;
@@ -32,16 +36,36 @@ final class ClientSession {
                 out = socket.getOutputStream();
                 Protocol.write(out, new Hello(name));
                 InputStream in = socket.getInputStream();
+
+                // Handshake: optional PakList, then the chunk stream, then Welcome.
+                // Packs already cached (by name + size) are skipped, but every chunk still
+                // has to be read off the wire to reach Welcome.
                 Packet p = Protocol.read(in);
-                if (p instanceof PakList pl && !pl.packs().isEmpty()) {
-                    for (PakList.PakSeq seq : pl.packs()) {
-                        int received = 0;
-                        while (received < seq.sizeBytes()) {
-                            Packet chunk = Protocol.read(in);
-                            if (!(chunk instanceof PakChunk c) || !c.name().equals(seq.name()))
+                if (p instanceof PakList pl) {
+                    List<PakList.PakSeq> seqs = pl.packs();
+                    long total = 0;
+                    for (PakList.PakSeq s : seqs) total += s.sizeBytes();
+                    listener.pakStart(total);
+                    boolean[] cached = new boolean[seqs.size()];
+                    for (int i = 0; i < seqs.size(); i++)
+                        cached[i] = listener.pakCached(seqs.get(i).name(), seqs.get(i).sizeBytes());
+                    long received = 0;
+                    for (int i = 0; i < seqs.size(); i++) {
+                        PakList.PakSeq seq = seqs.get(i);
+                        byte[] buf = cached[i] ? null : new byte[seq.sizeBytes()];
+                        int offset = 0;
+                        while (offset < seq.sizeBytes()) {
+                            Packet q = Protocol.read(in);
+                            if (!(q instanceof PakChunk c) || !c.name().equals(seq.name()))
                                 throw new IOException("corrupt pak stream for " + seq.name());
+                            if (c.offset() != offset)
+                                throw new IOException("pak chunk offset desync for " + seq.name());
+                            if (buf != null) System.arraycopy(c.data(), 0, buf, offset, c.data().length);
+                            offset += c.data().length;
                             received += c.data().length;
+                            listener.pakProgress(received, total);
                         }
+                        if (buf != null) listener.pakDone(seq.name(), buf);
                     }
                     p = Protocol.read(in);
                 }

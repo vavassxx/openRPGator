@@ -36,6 +36,7 @@ public final class GameRuntime {
         for (MapEntity e : m.entities()) {
             EntityId id = world.spawn();
             world.entities().set(id, new rpg.engine.core.component.Name(e.id()));
+            world.entities().set(id, new rpg.engine.core.component.Prefab(e.prefab()));
             world.entities().set(id, new rpg.engine.core.component.Transform(e.position(), 0));
             String sp = e.script();
             if (sp != null && !sp.isBlank()) {

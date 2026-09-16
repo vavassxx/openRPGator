@@ -51,6 +51,7 @@ jobs:
         run: >-
           gradle --no-daemon
           :dedicated-server:installDist
+          :server-admin:installDist
           :map-editor:installDist
           :desktop-client:installDist
           -PlwjglNatives=${{ matrix.lwjgl_natives }}
@@ -62,6 +63,7 @@ jobs:
           root="dist/openRPGator-linux-${{ matrix.arch }}"
           mkdir -p "$root"
           cp -a dedicated-server/build/install/dedicated-server "$root/server"
+          cp -a server-admin/build/install/server-admin "$root/server-admin"
           cp -a map-editor/build/install/map-editor "$root/map-editor"
           cp -a desktop-client/build/install/desktop-client "$root/client"
           tar -C dist -czf "openRPGator-linux-${{ matrix.arch }}.tar.gz" "openRPGator-linux-${{ matrix.arch }}"

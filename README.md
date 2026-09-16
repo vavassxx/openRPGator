@@ -12,7 +12,9 @@ Java 21, server-authoritative, 2.5D/isometric RPG engine targeting Linux/Windows
 - Lua-driven entity and world events
 - TCP server with length-framed JSON-free binary protocol
 - headless server runnable as a plain JAR on JVM/Termux
-- desktop map editor and script editor
+- desktop map editor (grid canvas, tile/collision painting, entity placement with sprite previews,
+  Lua script editor tab, undo/redo) and standalone script editor
+- Swing admin console for the dedicated server (`server-admin`)
 - desktop software renderer/client with no native dependency in the core
 - desktop client settings screen (map file + resources directory for the built-in local server)
 - `.pak` asset packs: PNG rasters packed into a binary container, streamed to clients during the
@@ -31,6 +33,11 @@ The server can be run with:
     ./dedicated-server/build/install/dedicated-server/bin/dedicated-server \
         --map examples/village.rmap --port 27800
 
+Or from the Swing admin console (same flags, saved to `~/.openrpgator/server.properties`):
+
+    gradle :server-admin:installDist
+    ./server-admin/build/install/server-admin/bin/server-admin
+
 To stream visual assets to clients, build the pack with `PakTool` and pass it to the server:
 
     gradle :pak:installDist
@@ -40,9 +47,24 @@ To stream visual assets to clients, build the pack with `PakTool` and pass it to
         --map examples/host/town.rmap --pak assets/basic.pak --port 27800
 
 The desktop client shows a loading screen with progress while packs are downloaded and caches
-them under `~/.openrpgator/paks` (re-skipped by name+size on later connects). Sprite indices refer
-to `sprite/<n>` entries keyed by the alphabetically sorted map entity ids; `sprite/player` is used
-for entities the server marks with resource `-1`. Assets in `assets/` are CC0-licensed (Kenney —
+them under `~/.openrpgator/paks` (re-skipped by name+size on later connects).
+
+### Shared data directory
+
+The server-tools and the desktop client's built-in local server share `~/.openrpgator/data`:
+
+- `data/maps` — `.rmap` maps; used as the default folder for the map/script editors and the
+  default server map (a single map found there is started automatically).
+- `data/paks` — `.pak` asset packs; auto-loaded for texture previews in the editor and streamed
+  by the server when no `--pak` is given.
+
+The server accepts `--data-dir <dir>` to point at a different root; `--map x.rmap` / `--pak p.pak`
+are resolved against it, and `--pak <dir>` streams every pack found in that directory. The Android
+editor uses the same layout inside its app folder (`data/maps`, `data/paks`).
+
+Sprite indices refer to `sprite/<n>` entries keyed by the alphabetically sorted entity *prefabs*;
+the editor binds a texture by setting an entity's prefab to a sprite key. `sprite/player` is used
+for entities the engine marks with resource `-1`. Assets in `assets/` are CC0-licensed (Kenney —
 see `assets-src/KENNEY_CC0_LICENSE.txt`).
 
 A fully scripted test host (NPCs, dialogues, triggers, teleports, patrols) lives in `examples/host/`
@@ -55,8 +77,8 @@ The core/server modules do not depend on LWJGL, AWT, Android or native libraries
 
 Every push runs `.github/workflows/build.yml`. It produces:
 
-- `openRPGator-linux-x86_64.tar.gz` — server, Swing map editor and desktop client with x86_64 LWJGL natives.
-- `openRPGator-linux-arm64.tar.gz` — server, Swing map editor and desktop client with ARM64 LWJGL natives.
+- `openRPGator-linux-x86_64.tar.gz` — server, server-admin, Swing map editor and desktop client with x86_64 LWJGL natives.
+- `openRPGator-linux-arm64.tar.gz` — server, server-admin, Swing map editor and desktop client with ARM64 LWJGL natives.
 - `openRPGator-map-editor-universal.apk` — the Android-native `.rmap` map editor as a universal APK.
 
 The Android application is currently the map editor; there is not yet a separate Android client or Android server application. The JVM server itself is headless and can run directly under Termux on ARM64.

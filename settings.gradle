@@ -16,4 +16,4 @@ dependencyResolutionManagement {
 }
 
 rootProject.name='openRPGator'
-include 'engine-core','engine-world','engine-map','engine-script','engine-network','engine-runtime','pak','renderer-api','renderer-desktop','dedicated-server','map-editor','script-editor','desktop-client','android-client'
+include 'engine-core','engine-world','engine-map','engine-script','engine-network','engine-runtime','pak','renderer-api','renderer-desktop','dedicated-server','server-admin','map-editor','script-editor','desktop-client','android-client'
