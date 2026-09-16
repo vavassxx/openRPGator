@@ -6,4 +6,4 @@
             <meta-data
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths" />
-        </provider></application></manifest>
+        </provider><provider android:name=".OpenRpgatorDocumentsProvider" android:authorities="rpg.engine.android.documents" android:exported="true" android:grantUriPermissions="true" android:permission="android.permission.MANAGE_DOCUMENTS"><intent-filter><action android:name="android.content.action.DOCUMENTS_PROVIDER" /></intent-filter></provider></application></manifest>
