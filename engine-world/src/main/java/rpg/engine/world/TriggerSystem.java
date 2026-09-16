@@ -2,6 +2,7 @@ package rpg.engine.world;
 import rpg.engine.core.ecs.*;
 import rpg.engine.core.component.*;
 import rpg.engine.core.event.*;
+import rpg.engine.core.math.WorldPosition;
 import java.util.*;
 
 /**
