@@ -314,27 +314,23 @@ public final class MainActivity extends Activity implements ClientSession.Listen
         storage.setTextColor(Color.rgb(180, 180, 180));
         storage.setTextSize(13);
         storage.setText(
-            "Data storage:\n" +
-            "• Maps: selected application data folder / maps\n" +
-            "• Logs: selected application data folder / logs\n" +
+            "App folder (data):\n" +
+            appStorage.description() + "\n\n" +
+            "• Maps / logs are kept inside the app folder\n" +
             "• Settings: Android app preferences\n" +
-            "• No data is stored on external servers"
+            "• The app folder is browsable from outside via the file picker (sidebar \u201copenRPGator\u201d)"
         );
         root.addView(storage, new LinearLayout.LayoutParams(-1, -2));
 
         // Storage section
-        root.addView(sectionLabel("Application data folder"));
+        root.addView(sectionLabel("Storage"));
         TextView storagePath = new TextView(this);
         storagePath.setTextColor(Color.rgb(180,180,180));
         storagePath.setText(appStorage.description());
         root.addView(storagePath);
-        Button chooseStorage = new Button(this);
-        chooseStorage.setText("Choose data folder");
-        chooseStorage.setOnClickListener(v -> openStoragePicker(false));
-        root.addView(chooseStorage, new LinearLayout.LayoutParams(-1, dp(48)));
 
         Button openStorage = new Button(this);
-        openStorage.setText("Open openRPGator storage");
+        openStorage.setText("Open openRPGator storage (outside)");
         openStorage.setOnClickListener(v -> openStoragePicker(true));
         root.addView(openStorage, new LinearLayout.LayoutParams(-1, dp(48)));
 
@@ -417,9 +413,12 @@ public final class MainActivity extends Activity implements ClientSession.Listen
                 | Intent.FLAG_GRANT_WRITE_URI_PERMISSION
                 | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
         if (preferAppRoot && Build.VERSION.SDK_INT >= 26) {
-            Uri rootUri = DocumentsContract.buildTreeDocumentUri(
-                    "rpg.engine.android.documents", "openrpgator");
-            i.putExtra(DocumentsContract.EXTRA_INITIAL_URI, rootUri);
+            try {
+                Uri rootUri = appStorage.providerTreeUri();
+                i.putExtra(DocumentsContract.EXTRA_INITIAL_URI, rootUri);
+            } catch (Exception e) {
+                logger.error("Could not build app storage URI", e);
+            }
         }
         try {
             startActivityForResult(i, PICK_STORAGE);
@@ -433,16 +432,8 @@ public final class MainActivity extends Activity implements ClientSession.Listen
         super.onActivityResult(request, result, data);
         if (request == PICK_STORAGE && result == RESULT_OK && data != null && data.getData() != null) {
             Uri uri = data.getData();
-            int flags = data.getFlags() & (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
-            boolean writable = appStorage.setRootAndPersist(uri, flags);
-            logger.info("Application data folder changed: " + uri + "; writable=" + writable);
-            if (writable) {
-                logger.info("Persistent storage test succeeded");
-                Toast.makeText(this, "Data folder selected and writable", Toast.LENGTH_SHORT).show();
-            } else {
-                logger.error("Selected data folder is not writable: " + uri, null);
-                Toast.makeText(this, "Folder selected, but Android did not grant write access", Toast.LENGTH_LONG).show();
-            }
+            logger.info("Application storage folder opened: " + uri);
+            Toast.makeText(this, "Opened " + uri, Toast.LENGTH_SHORT).show();
             showSettings();
         }
     }
