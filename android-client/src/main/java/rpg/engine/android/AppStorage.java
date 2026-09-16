@@ -52,6 +52,16 @@ public final class AppStorage {
     // ── Maps ─────────────────────────────────────────────────────
     public void saveMap(String name, byte[] data) throws IOException { File d=new File(rootFile(),"maps"); if(!d.exists()&&!d.mkdirs()) throw new IOException("Could not create maps directory"); try(FileOutputStream out=new FileOutputStream(new File(d,safeName(name)))){out.write(data);} }
     public byte[] loadMap(String name) throws IOException { File f=new File(new File(rootFile(),"maps"),safeName(name)); if(!f.isFile()) return null; try(InputStream in=new FileInputStream(f)){return readAll(in);} }
+    public File mapFile(String name) { return new File(new File(rootFile(),"maps"), safeName(name)); }
+    public String[] mapNames() {
+        File d = new File(rootFile(), "maps");
+        File[] files = d.listFiles((dir, n) -> n.endsWith(".rmap"));
+        if (files == null || files.length == 0) return new String[0];
+        Arrays.sort(files, (a, b) -> a.getName().compareToIgnoreCase(b.getName()));
+        String[] names = new String[files.length];
+        for (int i = 0; i < files.length; i++) names[i] = files[i].getName();
+        return names;
+    }
 
     private static String safeName(String n){return n==null||n.trim().isEmpty()?"map.rmap":n.replaceAll("[\\\\/:*?\"<>|]","_");}
     private static byte[] readAll(InputStream in)throws IOException{ByteArrayOutputStream o=new ByteArrayOutputStream();byte[] b=new byte[8192];int n;while((n=in.read(b))!=-1)o.write(b,0,n);return o.toByteArray();}

@@ -55,6 +55,7 @@ final class DesktopLocalServer {
         if (clients != null) clients.shutdownNow();
         players.clear();
         clientList.clear();
+        runtime = null; // rebuilt fresh on next start so map/world state does not persist
     }
 
     boolean isRunning() { return running; }
@@ -74,26 +75,28 @@ final class DesktopLocalServer {
 
     private void handle(Socket socket) {
         ClientRecord player = null;
+        GameRuntime rt = runtime; // local ref; start() may replace runtime after handle begins
         try (Socket s = socket) {
+            if (rt == null) return;
             InputStream in = s.getInputStream();
             OutputStream out = s.getOutputStream();
             Packet hello = Protocol.read(in);
             if (!(hello instanceof Hello h)) return;
-            long entityId = runtime.world().spawn().value();
+            long entityId = rt.world().spawn().value();
             EntityId id = new EntityId(entityId);
-            runtime.world().entities().set(id, new Name(h.name()));
-            runtime.world().entities().set(id, new Transform(new WorldPosition(0, 0, 0), 0));
+            rt.world().entities().set(id, new Name(h.name()));
+            rt.world().entities().set(id, new Transform(new WorldPosition(0, 0, 0), 0));
             player = new ClientRecord(entityId, s, out, h.name());
             players.put(entityId, player);
             clientList.add(player);
             Protocol.write(out, new Welcome(entityId));
-            broadcastSnapshot();
+            broadcastSnapshot(rt);
             while (running && !s.isClosed()) {
                 Packet q = Protocol.read(in);
                 if (q instanceof Input x) {
-                    applyInput(entityId, x);
+                    applyInput(rt, entityId, x);
                 } else if (q instanceof DialogResponse r) {
-                    runtime.respondDialog(r.dialogId(), r.choice());
+                    rt.respondDialog(r.dialogId(), r.choice());
                 }
             }
         } catch (IOException ignored) {
@@ -101,15 +104,15 @@ final class DesktopLocalServer {
             if (player != null) {
                 players.remove(player.entityId());
                 clientList.remove(player);
-                runtime.world().entities().destroy(new EntityId(player.entityId()));
-                broadcastSnapshot();
+                if (rt != null) rt.world().entities().destroy(new EntityId(player.entityId()));
+                broadcastSnapshot(rt);
             }
         }
     }
 
-    private void applyInput(long entityId, Input x) {
+    private void applyInput(GameRuntime rt, long entityId, Input x) {
         EntityId id = new EntityId(entityId);
-        var t = runtime.world().entities().get(id, Transform.class).orElseThrow();
+        var t = rt.world().entities().get(id, Transform.class).orElseThrow();
         var desired = new WorldPosition(t.position().x() + x.dx() * 0.1,
                 t.position().y() + x.dy() * 0.1, t.position().elevation());
         var moved = runtime.world().collision().move(id, desired);
@@ -117,12 +120,12 @@ final class DesktopLocalServer {
         if (x.has(Input.INTERACT))
             runtime.world().interactTarget(moved, 2.0).ifPresent(target ->
                     runtime.world().events().emit(new InteractRequestedEvent(id, target)));
-        broadcastSnapshot();
+        broadcastSnapshot(rt);
     }
 
-    private void broadcastSnapshot() {
-        List<Snapshot.EntityState> states = runtime.world().entities().entities().stream()
-                .map(eid -> runtime.world().entities().get(eid, Transform.class)
+    private void broadcastSnapshot(GameRuntime rt) {
+        List<Snapshot.EntityState> states = rt.world().entities().entities().stream()
+                .map(eid -> rt.world().entities().get(eid, Transform.class)
                         .map(t -> new Snapshot.EntityState(eid.value(), t.position().x(),
                                 t.position().y(), t.position().elevation()))
                         .orElse(null))

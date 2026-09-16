@@ -10,6 +10,7 @@ import android.view.*;
 import android.widget.*;
 import java.util.*;
 import java.io.File;
+import java.nio.file.Path;
 import rpg.engine.android.controls.*;
 import rpg.engine.network.*;
 
@@ -125,6 +126,22 @@ public final class MainActivity extends Activity implements ClientSession.Listen
         bar.addView(name, new LinearLayout.LayoutParams(0, dp(48), 2));
         root.addView(bar, new LinearLayout.LayoutParams(-1, dp(56)));
 
+        // ── Local server map row ──
+        LinearLayout localRow = new LinearLayout(this);
+        localRow.setOrientation(LinearLayout.HORIZONTAL);
+        localRow.setGravity(Gravity.CENTER_VERTICAL);
+        localRow.setPadding(dp(8), dp(4), dp(8), dp(4));
+        EditText localMap = field("Local map (.rmap)", prefs.getString("last_local_map", ""));
+        TextView mapInfo = new TextView(this);
+        mapInfo.setTextColor(Color.rgb(160, 160, 160));
+        mapInfo.setTextSize(11);
+        String[] maps = appStorage.mapNames();
+        mapInfo.setText("Maps: " + (maps.length == 0 ? "none saved" : String.join(", ", maps)));
+        mapInfo.setPadding(dp(8), 0, 0, 0);
+        localRow.addView(localMap, new LinearLayout.LayoutParams(0, dp(48), 2));
+        localRow.addView(mapInfo, new LinearLayout.LayoutParams(0, dp(48), 3));
+        root.addView(localRow, new LinearLayout.LayoutParams(-1, dp(56)));
+
         // ── Action buttons row ──
         LinearLayout actions = new LinearLayout(this);
         actions.setOrientation(LinearLayout.HORIZONTAL);
@@ -199,7 +216,10 @@ public final class MainActivity extends Activity implements ClientSession.Listen
             try {
                 if (!localServer.isRunning()) {
                     int p = Integer.parseInt(port.getText().toString().trim());
-                    localServer.start(p);
+                    String mapName = localMap.getText().toString().trim();
+                    prefs.edit().putString("last_local_map", mapName).apply();
+                    Path mapPath = mapName.isEmpty() ? null : appStorage.mapFile(mapName).toPath();
+                    localServer.start(p, mapPath);
                     host.setText("127.0.0.1");
                     status.setText("Local server on port " + p + ". Press Connect to join.");
                     local.setText("Stop server");
@@ -474,6 +494,20 @@ public final class MainActivity extends Activity implements ClientSession.Listen
     @Override public void connected(Welcome w) { runOnUiThread(() -> status.setText("Connected #" + w.entityId())); }
     @Override public void snapshot(Snapshot s) { runOnUiThread(() -> game.setSnapshot(s)); }
     @Override public void status(String s) { runOnUiThread(() -> status.setText(s)); }
+    @Override public void notify(String text) {
+        runOnUiThread(() -> Toast.makeText(this, text, Toast.LENGTH_LONG).show());
+    }
+    @Override public void dialog(Dialog d) {
+        runOnUiThread(() -> {
+            AlertDialog.Builder b = new AlertDialog.Builder(this);
+            b.setTitle("Dialog");
+            b.setMessage(d.text());
+            b.setCancelable(false);
+            b.setItems(d.choices().toArray(new String[0]), (di, which) ->
+                    session.dialogResponse(d.dialogId(), which));
+            b.show();
+        });
+    }
     @Override protected void onDestroy() { logger.info("Application stopping"); session.disconnect(); if (localServer != null) localServer.stop(); super.onDestroy(); }
 
     // ── Game view ───────────────────────────────────────────────────

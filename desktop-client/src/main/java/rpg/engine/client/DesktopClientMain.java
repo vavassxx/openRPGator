@@ -49,6 +49,7 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
     private RMap map;
     private Path mapPath;
     private Path resourceDir;
+    private DesktopLocalServer localServer;
     private int localPort = DEFAULT_PORT;
     private String connectHost = DEFAULT_HOST;
     private int connectPort = DEFAULT_PORT;
@@ -99,6 +100,7 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
         }
 
         // ── Cleanup ──────────────────────────────────────────────
+        if (localServer != null) localServer.stop();
         session.disconnect();
         renderer.close();
         saveConfig();
@@ -176,8 +178,14 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
         double bw = 260, bh = 36, gap = 48, startY = cy - 30;
         renderer.text(cx - renderer.textWidth(playerName, 1) / 2, startY + 68, "Name: " + playerName, 1, 0.5f, 0.5f, 0.55f);
 
-        if (button(cx - bw/2, startY, bw, bh, "Local Server (port " + localPort + ")"))
-            startLocalServer();
+        boolean serverRunning = localServer != null && localServer.isRunning();
+        if (serverRunning) {
+            if (button(cx - bw/2, startY, bw, bh, "Stop Local Server (port " + localPort + ")"))
+                stopLocalServer();
+        } else {
+            if (button(cx - bw/2, startY, bw, bh, "Local Server (port " + localPort + ")"))
+                startLocalServer();
+        }
         if (button(cx - bw/2, startY + gap, bw, bh, "Connect to " + connectHost + ":" + connectPort))
             connectRemote();
         if (button(cx - bw/2, startY + gap * 2, bw, bh, "Settings"))
@@ -200,7 +208,7 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
 
     private void startLocalServer() {
         try {
-            DesktopLocalServer localServer = new DesktopLocalServer();
+            if (localServer == null) localServer = new DesktopLocalServer();
             localServer.setResourceDir(resourceDir);
             localServer.start(localPort);
             if (mapPath != null && localServer.runtime() != null) {
@@ -212,6 +220,15 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
             statusText = "Failed: " + e.getMessage();
             addToast("Local server error: " + e.getMessage());
         }
+    }
+
+    private void stopLocalServer() {
+        if (localServer != null) localServer.stop();
+        connected = false;
+        session.disconnect();
+        localPlayerId.set(-1);
+        statusText = "Local server stopped";
+        addToast("Local server stopped");
     }
 
     private void connectRemote() {
