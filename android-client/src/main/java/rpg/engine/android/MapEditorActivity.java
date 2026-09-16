@@ -41,14 +41,15 @@ public final class MapEditorActivity extends Activity {
     private void applyImmersive() {
         if (Build.VERSION.SDK_INT >= 30) {
             getWindow().setDecorFitsSystemWindows(false);
-            WindowInsetsController controller = getWindow().getInsetsController();
-            // During onCreate() the DecorView may not yet be attached.
-            // Android can therefore return null here; retry from
-            // onWindowFocusChanged() once the window is ready.
-            if (controller == null) return;
-            controller.setSystemBarsBehavior(
-                WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
-            controller.hide(WindowInsets.Type.systemBars());
+            // During Activity.onCreate() the DecorView may not be attached yet.
+            // Defer the operation until the window has been attached.
+            getWindow().getDecorView().post(() -> {
+                WindowInsetsController controller = getWindow().getInsetsController();
+                if (controller == null) return;
+                controller.setSystemBarsBehavior(
+                    WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+                controller.hide(WindowInsets.Type.systemBars());
+            });
         } else {
             getWindow().getDecorView().setSystemUiVisibility(
                 View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
