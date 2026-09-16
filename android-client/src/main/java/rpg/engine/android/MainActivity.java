@@ -3,6 +3,7 @@ package rpg.engine.android;
 import android.app.*;
 import android.content.*;
 import android.net.Uri;
+import android.provider.DocumentsContract;
 import android.graphics.*;
 import android.os.*;
 import android.view.*;
@@ -329,8 +330,13 @@ public final class MainActivity extends Activity implements ClientSession.Listen
         root.addView(storagePath);
         Button chooseStorage = new Button(this);
         chooseStorage.setText("Choose data folder");
-        chooseStorage.setOnClickListener(v -> { Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE); i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION); startActivityForResult(i, PICK_STORAGE); });
+        chooseStorage.setOnClickListener(v -> openStoragePicker(false));
         root.addView(chooseStorage, new LinearLayout.LayoutParams(-1, dp(48)));
+
+        Button openStorage = new Button(this);
+        openStorage.setText("Open openRPGator storage");
+        openStorage.setOnClickListener(v -> openStoragePicker(true));
+        root.addView(openStorage, new LinearLayout.LayoutParams(-1, dp(48)));
 
         // Control layout section
         TextView controlsLabel = sectionLabel("Control layout");
@@ -403,6 +409,24 @@ public final class MainActivity extends Activity implements ClientSession.Listen
         scroll.setFillViewport(true);
         scroll.addView(root);
         setContentView(scroll);
+    }
+
+    private void openStoragePicker(boolean preferAppRoot) {
+        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+        i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
+                | Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+        if (preferAppRoot && Build.VERSION.SDK_INT >= 26) {
+            Uri rootUri = DocumentsContract.buildDocumentUri(
+                    "rpg.engine.android.documents", "openrpgator");
+            i.putExtra(DocumentsContract.EXTRA_INITIAL_URI, rootUri);
+        }
+        try {
+            startActivityForResult(i, PICK_STORAGE);
+        } catch (Exception e) {
+            logger.error("Could not open Android storage picker", e);
+            Toast.makeText(this, "Android file picker is unavailable", Toast.LENGTH_LONG).show();
+        }
     }
 
     @Override protected void onActivityResult(int request, int result, Intent data) {
