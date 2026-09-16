@@ -10,6 +10,7 @@ import rpg.engine.world.InteractRequestedEvent;
 
 import java.io.*;
 import java.net.*;
+import java.nio.file.*;
 import java.util.*;
 import java.util.concurrent.*;
 
@@ -26,7 +27,12 @@ final class DesktopLocalServer {
     private final Map<Long, ClientRecord> players = new ConcurrentHashMap<>();
     private final List<ClientRecord> clientList = new CopyOnWriteArrayList<>();
     private GameRuntime runtime;
+    private Path resourceDir;
     private record ClientRecord(long entityId, Socket socket, OutputStream out, String name) {}
+
+    /** Asset root for future {@code .pak} client assets; unused by the current binary RMAP pipeline. */
+    void setResourceDir(Path dir) { this.resourceDir = dir; }
+    Path resourceDir() { return resourceDir; }
 
     synchronized void start(int port) throws IOException {
         if (running) return;

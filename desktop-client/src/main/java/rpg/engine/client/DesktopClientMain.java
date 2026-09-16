@@ -37,8 +37,10 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
     private static final Path CONFIG_DIR = Path.of(System.getProperty("user.home"), ".openrpgator");
     private static final Path CONFIG_FILE = CONFIG_DIR.resolve("client.properties");
 
-    private enum Screen { MENU, GAME }
+    enum Screen { MENU, SETTINGS, GAME }
     private volatile Screen screen = Screen.MENU;
+
+    private static final int FIELD_CAPACITY = 512;
 
     private final LwjglRenderer renderer;
     private final DesktopClientSession session;
@@ -46,11 +48,15 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
     private GameRuntime runtime;
     private RMap map;
     private Path mapPath;
+    private Path resourceDir;
     private int localPort = DEFAULT_PORT;
     private String connectHost = DEFAULT_HOST;
     private int connectPort = DEFAULT_PORT;
     private String playerName = DEFAULT_NAME;
     private Double zoomArg = null;
+
+    private SettingsField mapField, resourceField, nameField;
+    private int focusedField; // index into settingsFields when on SETTINGS
 
     private final AtomicReference<Snapshot> latestSnapshot = new AtomicReference<>(new Snapshot(List.of()));
     private final AtomicLong localPlayerId = new AtomicLong(-1);
@@ -85,6 +91,7 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
 
             switch (screen) {
                 case MENU -> renderMenu(w, h);
+                case SETTINGS -> renderSettings(w, h);
                 case GAME -> renderGame(w, h);
             }
 
@@ -134,6 +141,11 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
             } catch (IOException ignored) {}
         }
         playerName = cfg.getProperty("name", playerName);
+        String savedMap = cfg.getProperty("map");
+        if (savedMap != null && !savedMap.isBlank() && mapPath == null && Files.exists(Path.of(savedMap)))
+            mapPath = Path.of(savedMap);
+        String savedRes = cfg.getProperty("resources");
+        if (savedRes != null && !savedRes.isBlank()) resourceDir = Path.of(savedRes);
         String savedConnect = cfg.getProperty("connect");
         if (savedConnect != null && connectHost.equals(DEFAULT_HOST)) connectTo(savedConnect);
     }
@@ -144,6 +156,8 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
             Properties cfg = new Properties();
             cfg.setProperty("name", playerName);
             cfg.setProperty("connect", connectHost + ":" + connectPort);
+            if (mapPath != null) cfg.setProperty("map", mapPath.toString());
+            if (resourceDir != null) cfg.setProperty("resources", resourceDir.toString());
             try (OutputStream out = Files.newOutputStream(CONFIG_FILE)) { cfg.store(out, "openRPGator client config"); }
         } catch (IOException ignored) {}
     }
@@ -166,15 +180,28 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
             startLocalServer();
         if (button(cx - bw/2, startY + gap, bw, bh, "Connect to " + connectHost + ":" + connectPort))
             connectRemote();
-        if (button(cx - bw/2, startY + gap * 2, bw, bh, "Quit"))
+        if (button(cx - bw/2, startY + gap * 2, bw, bh, "Settings"))
+            openSettings();
+        if (button(cx - bw/2, startY + gap * 3, bw, bh, "Quit"))
             renderer.close();
 
         renderer.text(8, h - 16, statusText, 1, 0.4f, 0.7f, 0.4f);
     }
 
+    private void openSettings() {
+        if (mapField == null) {
+            mapField = new SettingsField("Map file (.rmap)", mapPath == null ? "" : mapPath.toString());
+            resourceField = new SettingsField("Resources directory", resourceDir == null ? "" : resourceDir.toString());
+            nameField = new SettingsField("Player name", playerName);
+        }
+        focusedField = 0;
+        screen = Screen.SETTINGS;
+    }
+
     private void startLocalServer() {
         try {
             DesktopLocalServer localServer = new DesktopLocalServer();
+            localServer.setResourceDir(resourceDir);
             localServer.start(localPort);
             if (mapPath != null && localServer.runtime() != null) {
                 try { localServer.runtime().loadMap(mapPath); } catch (Exception e) { addToast("Map load error: " + e.getMessage()); }
@@ -193,16 +220,111 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
     }
 
     // ══════════════════════════════════════════════════════════════
+    //  SETTINGS SCREEN
+    // ══════════════════════════════════════════════════════════════
+    private void renderSettings(int w, int h) {
+        renderer.begin(w, h);
+
+        double cx = w / 2.0;
+        double top = 80;
+        renderer.text(cx - renderer.textWidth("Settings", 3) / 2, top, "Settings", 3, 0.9f, 0.8f, 0.3f);
+        renderer.text(cx - renderer.textWidth("Local server: map file and resources", 1) / 2,
+                top + 40, "Local server: map file and resources", 1, 0.6f, 0.6f, 0.65f);
+
+        SettingsField[] fields = { nameField, mapField, resourceField };
+        double fw = 560, fh = 42, fX = cx - fw / 2, fY = top + 76;
+        double gap = 62;
+
+        for (int i = 0; i < fields.length; i++) {
+            SettingsField f = fields[i];
+            double y = fY + i * gap;
+            boolean focused = i == focusedField;
+            renderer.text(fX, y - 12, f.label(), 1, 0.6f, 0.6f, 0.65f);
+            if (focused)
+                renderer.rect(fX, y, fw, fh, 0.2f, 0.35f, 0.25f, 0.95f);
+            else
+                renderer.rect(fX, y, fw, fh, 0.1f, 0.12f, 0.16f, 0.95f);
+            renderer.rect(fX, y, fw, 2, 0.4f, 0.6f, 0.4f, 1f);
+            renderer.rect(fX, y + fh - 2, fw, 2, 0.4f, 0.6f, 0.4f, 1f);
+            String display = f.value();
+            if (focused) display += "\u2588"; // block cursor
+            renderer.text(fX + 10, y + (fh - 8) / 2, display, 1, 0.92f, 0.92f, 0.95f);
+            if (renderer.mouseClicked(0)
+                    && renderer.mouseX() >= fX && renderer.mouseX() <= fX + fw
+                    && renderer.mouseY() >= y && renderer.mouseY() <= y + fh) {
+                focusedField = i;
+            }
+        }
+
+        updateSettingsFields();
+
+        // ── Actions ───────────────────────────────────────────────
+        double bw = 180, bh = 36, by = fY + fields.length * gap + 20;
+        boolean saved = button(cx - bw / 2 - 10, by, bw, bh, "Apply");
+        if (button(cx - bw / 2 + bw + 20, by, bw, bh, "Back")) { screen = Screen.MENU; return; }
+        if (saved) applySettings();
+        if (renderer.keyPressed(LwjglRenderer.KEY_ESCAPE)) { screen = Screen.MENU; return; }
+
+        String help = "Tab = next field   |   Enter = apply   |   Esc = back";
+        renderer.text(cx - renderer.textWidth(help, 1) / 2, by + bh + 20, help, 1, 0.4f, 0.4f, 0.45f);
+        renderer.text(8, h - 16, statusText, 1, 0.4f, 0.7f, 0.4f);
+    }
+
+    private void updateSettingsFields() {
+        SettingsField[] fields = { nameField, mapField, resourceField };
+        if (renderer.keyPressed(LwjglRenderer.KEY_TAB)) {
+            focusedField = (focusedField + 1) % fields.length;
+        }
+        SettingsField f = fields[focusedField];
+        if (renderer.keyPressed(LwjglRenderer.KEY_BACKSPACE) && !f.value().isEmpty()) {
+            f.setValue(f.value().substring(0, f.value().length() - 1));
+        }
+        int c;
+        while ((c = renderer.consumeChar()) != 0) {
+            if (f.value().length() < FIELD_CAPACITY) f.setValue(f.value() + (char) c);
+        }
+        if (renderer.keyPressed(LwjglRenderer.KEY_ENTER)) { applySettings(); screen = Screen.MENU; }
+    }
+
+    private void applySettings() {
+        playerName = nameField.value().isBlank() ? DEFAULT_NAME : nameField.value().trim();
+        String mapStr = mapField.value().trim();
+        if (!mapStr.isEmpty()) {
+            mapPath = Path.of(mapStr);
+            map = null; // force reload from new path
+        }
+        String resStr = resourceField.value().trim();
+        resourceDir = resStr.isEmpty() ? null : Path.of(resStr);
+        statusText = "Settings saved";
+        addToast("Settings applied");
+        saveConfig();
+    }
+
+    private static final class SettingsField {
+        private final String label;
+        private String value;
+        SettingsField(String label, String value) { this.label = label; this.value = value; }
+        String label() { return label; }
+        String value() { return value; }
+        void setValue(String value) { this.value = value; }
+    }
+
+    // ══════════════════════════════════════════════════════════════
     //  GAME SCREEN
     // ══════════════════════════════════════════════════════════════
     private void renderGame(int w, int h) {
         // ── Keyboard → movement ──────────────────────────────────
-        double dx = 0, dy = 0;
+        // WASD/arrows are screen-relative; convert to world axes for the
+        // isometric projection (screen right = world (+1,-1), screen down = world (+1,+1)).
+        double sx = 0, sy = 0;
         int actions = 0;
-        if (renderer.keyDown(LwjglRenderer.KEY_D) || renderer.keyDown(LwjglRenderer.KEY_RIGHT)) dx += 1;
-        if (renderer.keyDown(LwjglRenderer.KEY_A) || renderer.keyDown(LwjglRenderer.KEY_LEFT)) dx -= 1;
-        if (renderer.keyDown(LwjglRenderer.KEY_S) || renderer.keyDown(LwjglRenderer.KEY_DOWN)) dy += 1;
-        if (renderer.keyDown(LwjglRenderer.KEY_W) || renderer.keyDown(LwjglRenderer.KEY_UP)) dy -= 1;
+        if (renderer.keyDown(LwjglRenderer.KEY_D) || renderer.keyDown(LwjglRenderer.KEY_RIGHT)) sx += 1;
+        if (renderer.keyDown(LwjglRenderer.KEY_A) || renderer.keyDown(LwjglRenderer.KEY_LEFT)) sx -= 1;
+        if (renderer.keyDown(LwjglRenderer.KEY_S) || renderer.keyDown(LwjglRenderer.KEY_DOWN)) sy += 1;
+        if (renderer.keyDown(LwjglRenderer.KEY_W) || renderer.keyDown(LwjglRenderer.KEY_UP)) sy -= 1;
+        double dx = sx + sy, dy = sy - sx;
+        double len = Math.sqrt(dx * dx + dy * dy);
+        if (len > 1.0) { dx /= len; dy /= len; }
         if (renderer.keyDown(LwjglRenderer.KEY_J)) actions |= Input.PRIMARY;
         if (renderer.keyDown(LwjglRenderer.KEY_K)) actions |= Input.SECONDARY;
         if (renderer.keyDown(LwjglRenderer.KEY_L)) actions |= Input.INTERACT;
@@ -261,6 +383,7 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
         }
 
         // ── HUD (screen-space overlay) ───────────────────────────
+        renderer.resetView();
         int hudY = 4;
         String title = "openRPGator";
         if (localPlayerId.get() > 0) title += "  #" + localPlayerId.get();

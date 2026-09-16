@@ -43,13 +43,16 @@ public final class LwjglRenderer implements Renderer {
     private GLFWWindowSizeCallback winSizeCb;
     private GLFWFramebufferSizeCallback fbSizeCb;
     private GLFWKeyCallback keyCb;
+    private GLFWCharCallback charCb;
     private GLFWMouseButtonCallback mouseBtnCb;
     private GLFWCursorPosCallback cursorPosCb;
 
     private final boolean[] keys = new boolean[GLFW_KEY_LAST + 1];
+    private final boolean[] keyEdge = new boolean[GLFW_KEY_LAST + 1];
     private final boolean[] mouseBtn = new boolean[GLFW_MOUSE_BUTTON_LAST + 1];
     private final boolean[] mouseBtnEdge = new boolean[GLFW_MOUSE_BUTTON_LAST + 1];
     private double mouseX, mouseY;
+    private int pendingChar;
 
     // ── 5×7 bitmap font (ASCII 32..126), row-major, bits 4..0 = cols 4..0
     private static final int FONT_FIRST = 32, FONT_LAST = 126;
@@ -76,9 +79,17 @@ public final class LwjglRenderer implements Renderer {
         glfwSetFramebufferSizeCallback(window, fbSizeCb);
 
         keyCb = GLFWKeyCallback.create((win, key, scancode, action, mods) -> {
-            if (key >= 0 && key <= GLFW_KEY_LAST) keys[key] = (action != GLFW_RELEASE);
+            if (key >= 0 && key <= GLFW_KEY_LAST) {
+                keys[key] = (action != GLFW_RELEASE);
+                if (action == GLFW_PRESS) keyEdge[key] = true;
+            }
         });
         glfwSetKeyCallback(window, keyCb);
+
+        charCb = GLFWCharCallback.create((win, codepoint) -> {
+            if (codepoint >= 32 && codepoint < 127) pendingChar = codepoint;
+        });
+        glfwSetCharCallback(window, charCb);
 
         mouseBtnCb = GLFWMouseButtonCallback.create((win, button, action, mods) -> {
             if (button >= 0 && button <= GLFW_MOUSE_BUTTON_LAST) {
@@ -128,6 +139,7 @@ public final class LwjglRenderer implements Renderer {
 
     @Override public void close() {
         if (keyCb != null) keyCb.free();
+        if (charCb != null) charCb.free();
         if (winSizeCb != null) winSizeCb.free();
         if (fbSizeCb != null) fbSizeCb.free();
         if (mouseBtnCb != null) mouseBtnCb.free();
@@ -145,6 +157,12 @@ public final class LwjglRenderer implements Renderer {
         double camSx = (camX - camY) * TILE_HW * zoom;
         double camSy = (camX + camY) * TILE_HH * zoom;
         glTranslated(fbw * 0.5 - camSx, fbh * 0.33 - camSy, 0);
+    }
+
+    /** Resets the modelview to identity so screen-space HUD can be drawn after applyCamera. */
+    public void resetView() {
+        glMatrixMode(GL_MODELVIEW);
+        glLoadIdentity();
     }
 
     // ── Renderer interface ────────────────────────────────────────
@@ -235,6 +253,15 @@ public final class LwjglRenderer implements Renderer {
     // ── Input helpers ─────────────────────────────────────────────
     public boolean keyDown(int glfwKey) { return glfwKey >= 0 && glfwKey <= GLFW_KEY_LAST && keys[glfwKey]; }
 
+    /** True on the frame a key was pressed; consumed on read (one shot per press). */
+    public boolean keyPressed(int glfwKey) {
+        if (glfwKey >= 0 && glfwKey <= GLFW_KEY_LAST && keyEdge[glfwKey]) {
+            keyEdge[glfwKey] = false;
+            return true;
+        }
+        return false;
+    }
+
     public boolean mouseDown(int button) {
         return button >= 0 && button <= GLFW_MOUSE_BUTTON_LAST && mouseBtn[button];
     }
@@ -248,6 +275,13 @@ public final class LwjglRenderer implements Renderer {
     public double mouseX() { return mouseX; }
     public double mouseY() { return mouseY; }
 
+    /** Returns the next typed character (ASCII 32..126), consumed on read; 0 if none. */
+    public int consumeChar() {
+        int c = pendingChar;
+        pendingChar = 0;
+        return c;
+    }
+
     public boolean isFocused() { return glfwGetWindowAttrib(window, GLFW_FOCUSED) == GLFW_TRUE; }
     public int framebufferWidth() { return fbw; }
     public int framebufferHeight() { return fbh; }
@@ -257,6 +291,7 @@ public final class LwjglRenderer implements Renderer {
 
     private void resetEdges() {
         for (int i = 0; i < mouseBtnEdge.length; i++) mouseBtnEdge[i] = false;
+        for (int i = 0; i < keyEdge.length; i++) keyEdge[i] = false;
     }
 
     // ── Font data ─────────────────────────────────────────────────

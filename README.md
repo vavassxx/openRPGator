@@ -14,6 +14,7 @@ Java 21, server-authoritative, 2.5D/isometric RPG engine targeting Linux/Windows
 - headless server runnable as a plain JAR on JVM/Termux
 - desktop map editor and script editor
 - desktop software renderer/client with no native dependency in the core
+- desktop client settings screen (map file + resources directory for the built-in local server)
 
 ## Build
 

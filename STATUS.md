@@ -70,6 +70,15 @@ The scripting API has been substantially expanded (see `SCRIPTING.md` for the fu
 
 No sandbox is applied. `JsePlatform.standardGlobals()` is the default. Host operators own their scripts.
 
+## Desktop client settings screen
+
+- `Main menu → Settings` configures the built-in local server: **map file** (`.rmap`), **resources directory** (future `.pak` assets) and **player name**.
+- Text fields support Tab to switch focus, Backspace, Enter/Esc; **Apply** persists to `~/.openrpgator/client.properties` (`map`, `resources`, `name`).
+- The renderer gained one-shot key edges (`keyPressed`) and a GLFW char callback for text input.
+- Movement input is now **screen-relative**: WASD/arrows are converted through the inverse isometric projection, so `D`/`Right` move the entity right on screen, `W`/`Up` up, etc. (previously raw world-axis deltas made the four keys move diagonally relative to the camera).
+- `resetView()` pins the in-game HUD/toasts/dialogs to screen space after the camera transform.
+- Android has its own settings screen (default host/port, controls, storage); its minimal `LocalServerBackend` does not load maps, so map/resource fields were not ported there.
+
 ## Пометка основному кодеру: модель .pak для клиентских ассетов
 
 В будущем клиентский рендер (диалоги, UI-элементы, текстуры) должен перейти на модель **`.pak`-ассетов**:
