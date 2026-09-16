@@ -5,6 +5,7 @@ import rpg.engine.core.component.*;
 import rpg.engine.core.ecs.*;
 import rpg.engine.core.math.*;
 import rpg.engine.network.*;
+import rpg.engine.pak.PakStreamer;
 import rpg.engine.world.InteractRequestedEvent;
 import rpg.engine.script.UiSink;
 
@@ -26,21 +27,31 @@ public final class ServerMain {
     private static volatile GameRuntime runtime;
     private static volatile boolean running = true;
 
+    private static Map<String, Integer> sprites = Map.of();
+    private static volatile List<Path> pakFiles = List.of();
+
     public static void main(String[] args) throws Exception {
         Path map = null;
         int port = 27800;
+        List<Path> paks = new ArrayList<>();
         for (int i = 0; i < args.length; i++) {
             if (args[i].equals("--map")) map = Path.of(args[++i]);
             else if (args[i].equals("--port")) port = Integer.parseInt(args[++i]);
-            else if (args[i].equals("--help")) { System.out.println("--map FILE --port PORT"); return; }
+            else if (args[i].equals("--pak")) paks.add(Path.of(args[++i]));
+            else if (args[i].equals("--help")) { System.out.println("--map FILE --port PORT --pak FILE.pak"); return; }
         }
+        if (!paks.isEmpty()) System.out.println("Will stream " + paks.size() + " pak(s): "
+                + paks.stream().map(p -> p.getFileName()).toList());
+        pakFiles = List.copyOf(paks);
 
         runtime = new GameRuntime();
         runtime.setUiSink(uiSink());
         if (map != null) {
             try {
                 runtime.loadMap(map);
-                System.out.println("Loaded map: " + map.getFileName());
+                sprites = Sprites.byId(runtime.map());
+                System.out.println("Loaded map: " + map.getFileName()
+                        + " (" + sprites.size() + " sprite ids)");
             } catch (Exception e) {
                 System.err.println("Failed to load map: " + e.getMessage());
             }
@@ -73,6 +84,7 @@ public final class ServerMain {
             Long entityId = spawnPlayer(h.name());
             client = new Client(entityId, s, out);
             clients.put(entityId, client);
+            if (!pakFiles.isEmpty()) PakStreamer.send(out, pakFiles);
             Protocol.write(out, new Welcome(entityId));
 
             while (running && !s.isClosed()) {
@@ -121,10 +133,15 @@ public final class ServerMain {
 
     private static void broadcastSnapshot() {
         List<Snapshot.EntityState> states = runtime.world().entities().entities().stream()
-                .map(id -> runtime.world().entities().get(id, Transform.class)
-                        .map(t -> new Snapshot.EntityState(id.value(), t.position().x(),
-                                t.position().y(), t.position().elevation()))
-                        .orElse(null))
+                .map(id -> {
+                    var reg = runtime.world().entities();
+                    var t = reg.get(id, Transform.class).orElse(null);
+                    if (t == null) return null;
+                    String name = reg.get(id, Name.class).map(Name::value).orElse(null);
+                    int resource = Sprites.resourceOf(sprites, name);
+                    return new Snapshot.EntityState(id.value(), t.position().x(),
+                            t.position().y(), t.position().elevation(), resource);
+                })
                 .filter(Objects::nonNull)
                 .toList();
         Snapshot snapshot = new Snapshot(states);

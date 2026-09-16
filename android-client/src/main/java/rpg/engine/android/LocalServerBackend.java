@@ -1,6 +1,7 @@
 package rpg.engine.android;
 
 import rpg.engine.runtime.GameRuntime;
+import rpg.engine.runtime.Sprites;
 import rpg.engine.core.component.Name;
 import rpg.engine.core.component.Transform;
 import rpg.engine.core.ecs.EntityId;
@@ -36,6 +37,7 @@ final class LocalServerBackend {
     private final List<Player> clientList = new CopyOnWriteArrayList<>();
     private volatile GameRuntime runtime;
     private Path mapFile;
+    private Map<String, Integer> sprites = Map.of();
 
     LocalServerBackend(Listener listener) { this.listener = listener; }
 
@@ -47,6 +49,7 @@ final class LocalServerBackend {
         if (mapFile != null && Files.isRegularFile(mapFile)) {
             try {
                 runtime.loadMap(mapFile);
+                sprites = Sprites.byId(runtime.map());
                 listener.status("Local server listening on " + port + " (" + mapFile.getFileName() + ")");
             } catch (Exception e) {
                 listener.status("Local server: map load failed: " + e.getMessage());
@@ -146,10 +149,15 @@ final class LocalServerBackend {
 
     private void broadcastSnapshot(GameRuntime rt) {
         List<Snapshot.EntityState> states = rt.world().entities().entities().stream()
-                .map(eid -> rt.world().entities().get(eid, Transform.class)
-                        .map(t -> new Snapshot.EntityState(eid.value(), t.position().x(),
-                                t.position().y(), t.position().elevation()))
-                        .orElse(null))
+                .map(eid -> {
+                    var t = rt.world().entities().get(eid, Transform.class).orElse(null);
+                    if (t == null) return null;
+                    String name = rt.world().entities().get(eid, Name.class)
+                            .map(Name::value).orElse(null);
+                    int resource = Sprites.resourceOf(sprites, name);
+                    return new Snapshot.EntityState(eid.value(), t.position().x(),
+                            t.position().y(), t.position().elevation(), resource);
+                })
                 .filter(Objects::nonNull)
                 .toList();
         Snapshot snapshot = new Snapshot(states);

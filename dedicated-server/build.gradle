@@ -1,4 +1,4 @@
 plugins { id 'application' }
-dependencies { implementation project(':engine-runtime') }
+dependencies { implementation project(':engine-runtime'); implementation project(':pak') }
 application { mainClass = 'rpg.engine.server.ServerMain' }
 jar { manifest { attributes 'Main-Class': application.mainClass.get() } }

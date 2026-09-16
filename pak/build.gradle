@@ -1,0 +1,6 @@
+plugins { id 'application' }
+dependencies {
+    implementation project(':engine-network')
+}
+application { mainClass = 'rpg.engine.pak.PakTool' }
+jar { manifest { attributes 'Main-Class': application.mainClass.get() } }

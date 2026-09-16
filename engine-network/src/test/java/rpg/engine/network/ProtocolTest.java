@@ -21,10 +21,21 @@ class ProtocolTest {
                 roundTrip(new Input(1.25, -2.5, Input.PRIMARY | Input.INTERACT)));
 
         Snapshot snapshot = new Snapshot(List.of(
-                new Snapshot.EntityState(1, 1.0, 2.0, 0.0),
-                new Snapshot.EntityState(2, -3.5, 4.25, 1.5)
+                new Snapshot.EntityState(1, 1.0, 2.0, 0.0, 4),
+                new Snapshot.EntityState(2, -3.5, 4.25, 1.5, -1)
         ));
         assertEquals(snapshot, roundTrip(snapshot));
+
+        PakList pakList = new PakList(List.of(
+                new PakList.PakSeq("basic.pak", 123456),
+                new PakList.PakSeq("ui.pak", 1024)
+        ));
+        assertEquals(pakList, roundTrip(pakList));
+        PakChunk chunk = new PakChunk("basic.pak", 65536, new byte[]{1, 2, 3});
+        PakChunk chunkRt = (PakChunk) roundTrip(chunk);
+        assertEquals(chunk.name(), chunkRt.name());
+        assertEquals(chunk.offset(), chunkRt.offset());
+        assertArrayEquals(chunk.data(), chunkRt.data());
     }
 
     @Test

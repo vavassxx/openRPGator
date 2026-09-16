@@ -1,13 +1,17 @@
 package rpg.engine.render.desktop;
 
 import rpg.engine.render.Renderer;
+import rpg.engine.pak.PakImage;
 import org.lwjgl.glfw.*;
 import org.lwjgl.system.MemoryStack;
+import org.lwjgl.BufferUtils;
 
 import static org.lwjgl.glfw.GLFW.*;
 import static org.lwjgl.opengl.GL11.*;
+import static org.lwjgl.opengl.GL12.GL_CLAMP_TO_EDGE;
 import static org.lwjgl.system.MemoryStack.stackPush;
 
+import java.nio.ByteBuffer;
 import java.nio.IntBuffer;
 
 /**
@@ -39,6 +43,12 @@ public final class LwjglRenderer implements Renderer {
 
     private double camX, camY;
     private double zoom = 1.0;
+
+    // ── Pak-backed textures (indexed by tile id / entity resource / "player" slot) ──
+    private int[] tileTex = new int[0];
+    private int[] spriteTex = new int[0];
+    private int[] spriteTexW = new int[0];
+    private int[] spriteTexH = new int[0];
 
     private GLFWWindowSizeCallback winSizeCb;
     private GLFWFramebufferSizeCallback fbSizeCb;
@@ -166,30 +176,97 @@ public final class LwjglRenderer implements Renderer {
     }
 
     // ── Renderer interface ────────────────────────────────────────
+
+    /** Uploads pak tile rasters as GL textures; indexes match the tile ids in the map. */
+    public void setTileImages(PakImage[] images) {
+        tileTex = upload(images);
+    }
+
+    /** Uploads pak sprite rasters as GL textures; indexes match entity resources. */
+    public void setSpriteImages(PakImage[] images) {
+        int n = images.length;
+        spriteTex = upload(images);
+        spriteTexW = new int[n];
+        spriteTexH = new int[n];
+        for (int i = 0; i < n; i++) { spriteTexW[i] = images[i].width(); spriteTexH[i] = images[i].height(); }
+    }
+
+    private int[] upload(PakImage[] images) {
+        int n = images.length;
+        int[] ids = new int[n];
+        for (int i = 0; i < n; i++) {
+            if (images[i] == null) continue;
+            PakImage img = images[i];
+            int id = glGenTextures();
+            glBindTexture(GL_TEXTURE_2D, id);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            ByteBuffer buf = BufferUtils.createByteBuffer(img.bytes());
+            buf.put(img.rgba());
+            buf.flip();
+            glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, img.width(), img.height(), 0, GL_RGBA, GL_UNSIGNED_BYTE, buf);
+            ids[i] = id;
+        }
+        return ids;
+    }
+
     @Override public void tile(int x, int y, int id) {
         double sx = (x - y) * TILE_HW * zoom;
         double sy = (x + y) * TILE_HH * zoom;
         double hw = TILE_HW * zoom, hh = TILE_HH * zoom;
-        glBegin(GL_QUADS);
-        glColor3f(0.18f + 0.03f * (id % 3), 0.22f, 0.18f);
-        glVertex2d(sx, sy);
-        glVertex2d(sx + hw, sy + hh);
-        glVertex2d(sx, sy + hh * 2);
-        glVertex2d(sx - hw, sy + hh);
-        glEnd();
+        if (id >= 0 && id < tileTex.length && tileTex[id] != 0) {
+            glEnable(GL_TEXTURE_2D);
+            glBindTexture(GL_TEXTURE_2D, tileTex[id]);
+            glColor3f(1f, 1f, 1f);
+            glBegin(GL_QUADS);
+            glTexCoord2f(0.5f, 1f); glVertex2d(sx, sy);
+            glTexCoord2f(1f, 0f);   glVertex2d(sx + hw, sy + hh);
+            glTexCoord2f(0.5f, 0f); glVertex2d(sx, sy + hh * 2);
+            glTexCoord2f(0f, 0f);   glVertex2d(sx - hw, sy + hh);
+            glEnd();
+            glDisable(GL_TEXTURE_2D);
+        } else {
+            glBegin(GL_QUADS);
+            glColor3f(0.18f + 0.03f * (id % 3), 0.22f, 0.18f);
+            glVertex2d(sx, sy);
+            glVertex2d(sx + hw, sy + hh);
+            glVertex2d(sx, sy + hh * 2);
+            glVertex2d(sx - hw, sy + hh);
+            glEnd();
+        }
     }
 
     @Override public void sprite(double x, double y, double elevation, int resource) {
         double sx = (x - y) * TILE_HW * zoom;
         double sy = (x + y) * TILE_HH * zoom - elevation * 8 * zoom;
-        double hw = 8 * zoom, h = 20 * zoom;
-        glBegin(GL_QUADS);
-        glColor3f(0.8f, 0.7f, 0.3f);
-        glVertex2d(sx - hw, sy - h);
-        glVertex2d(sx + hw, sy - h);
-        glVertex2d(sx + hw, sy);
-        glVertex2d(sx - hw, sy);
-        glEnd();
+        int tex = resource >= 0 && resource < spriteTex.length ? spriteTex[resource] : 0;
+        int tw = resource >= 0 && resource < spriteTexW.length ? spriteTexW[resource] : 0;
+        int th = resource >= 0 && resource < spriteTexH.length ? spriteTexH[resource] : 0;
+        if (tex != 0 && th > 0) {
+            double w = tw * zoom, h = th * zoom;
+            glEnable(GL_TEXTURE_2D);
+            glBindTexture(GL_TEXTURE_2D, tex);
+            glColor3f(1f, 1f, 1f);
+            glBegin(GL_QUADS);
+            glTexCoord2f(0f, 1f); glVertex2d(sx - w / 2, sy - h);
+            glTexCoord2f(1f, 1f); glVertex2d(sx + w / 2, sy - h);
+            glTexCoord2f(1f, 0f); glVertex2d(sx + w / 2, sy);
+            glTexCoord2f(0f, 0f); glVertex2d(sx - w / 2, sy);
+            glEnd();
+            glDisable(GL_TEXTURE_2D);
+        } else {
+            double hw = 8 * zoom, h = 20 * zoom;
+            glBegin(GL_QUADS);
+            glColor3f(0.8f, 0.7f, 0.3f);
+            glVertex2d(sx - hw, sy - h);
+            glVertex2d(sx + hw, sy - h);
+            glVertex2d(sx + hw, sy);
+            glVertex2d(sx - hw, sy);
+            glEnd();
+        }
     }
 
     // ── UI primitives ─────────────────────────────────────────────

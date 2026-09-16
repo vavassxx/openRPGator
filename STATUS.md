@@ -20,14 +20,13 @@ Implemented:
 - unit-test sources and smoke tests
 
 Not yet production-complete:
-- asset pipeline, texture atlas, animation system
+- full texture atlas and animation system (single-frame `.pak` sprites/tiles work end-to-end)
 - prediction/interpolation and robust reconnect/authentication
 - advanced editor tooling (painting/entity inspector/undo/redo)
 - complete Android touch UI and Android server foreground-service wrapper
 - packaging/signing for each desktop target
 - sandbox policy (full LuaJ access by design; host responsibility per project policy)
 - persistence/database layer and account/auth system
-- client-side dialogs and server→client notifications (network packets + UI rendering) — **network side done**: `engine.notify`/`engine.dialog` via `UiSink` (dedicated-server + desktop local server install it), `Notify`/`Dialog`/`DialogResponse` packets; desktop client toast/choice UI rendering still pending
 
 The architecture deliberately keeps these as subsequent layers rather than faking them with placeholder implementations.
 
@@ -70,6 +69,15 @@ The scripting API has been substantially expanded (see `SCRIPTING.md` for the fu
 
 No sandbox is applied. `JsePlatform.standardGlobals()` is the default. Host operators own their scripts.
 
+## Scripted test host
+
+`examples/host/town.rmap` + Lua scripts: a password-checking guard (nested dialog), an elder with a
+two-branch quest, a merchant with a one-shot sale, a destroyable chest, a patrolling rat, teleport
+arches on `on_enter`, a well interact and a global-timer `sky` conductor. Verified offline by driving
+`GameRuntime` directly (load → tick → simulate `Input.INTERACT` → answer `DialogResponse`). See
+`examples/host/README.md` for the runbook and the remaining work (network map push, tile collision,
+sprite/.pak pipeline, inventory/combat, persistence, smarter AI, Android guest check).
+
 ## Desktop client settings screen
 
 - `Main menu → Settings` configures the built-in local server: **map file** (`.rmap`), **resources directory** (future `.pak` assets) and **player name**.
@@ -79,13 +87,27 @@ No sandbox is applied. `JsePlatform.standardGlobals()` is the default. Host oper
 - `resetView()` pins the in-game HUD/toasts/dialogs to screen space after the camera transform.
 - Android has its own settings screen (default host/port, controls, storage); its minimal `LocalServerBackend` does not load maps, so map/resource fields were not ported there.
 
-## Пометка основному кодеру: модель .pak для клиентских ассетов
+## Ассет-пайплайн `.pak` (реализовано)
 
-В будущем клиентский рендер (диалоги, UI-элементы, текстуры) должен перейти на модель **`.pak`-ассетов**:
+Вместо хардкоженных текстур на клиенте ассеты распространяются как **`.pak`-паки**:
 
-- На сервере хранится `.pak`-архив с текстурами, шрифтами, UI-layout'ами, анимациями и прочими визуальными ресурсами.
-- При подключении клиента сервер стримует `.pak` клиенту.
-- Клиент поднимает ресурсы из `.pak` и передаёт их в распоряжение серверных скриптов — скрипт решает, *что* показать, а рендер дёргает ресурсы из уже загруженного `.pak`.
-- Это отвязывает серверные скрипты от хардкоженных текстур/глифов на клиенте и позволяет обновлять визуал без пересборки клиента.
-
-Для первой итерации (текущей) на десктопе используется встроенный bitmap-шрифт 5×7 в GL — это минимально sufficient до появления `.pak`-пайплайна.
+- **Формат (`pak`)**: магический `PK01`, version, index (name → w/h/len/offset), затем сырые RGBA-растры
+  (без сжатия PNG — клиенту не нужен декодер изображений). Ключи пространства имён: `tile/…`, `sprite/…`, `ui/…`.
+- **Упаковщик CLI (`PakTool`)**: `pack --root assets-src --out assets/basic.pak [--resize WxH]` пакерует
+  `tile/*.png`, `sprite/*.png`, `ui/*.png`; `--resize` подгоняет большие спрайты (Kenney 256×512 → 32×64).
+- **Стриминг в хендшейке**: после `Hello` сервер шлёт `PakList(8)` (имена и размеры), затем поток
+  `PakChunk(9)` (по 64 KiB с offset), и только потом `Welcome(2)`. Старый сервер (только `Welcome`)
+  по-прежнему поддерживается.
+- **Клиентский кэш**: десктоп-клиент кэширует паки в `~/.openrpgator/paks` (по имени+размеру),
+  закэшированные паки пропускаются без записи на диск, но всё равно читаются с сокета до `Welcome`.
+  Во время скачивания показывается экран **LOADING** с прогресс-баром и кнопкой отмены (Esc).
+- **Рендер**: `PakAssets` собирает `tile/*` и `sprite/*` (отсортированные) в нумерантные массивы;
+  `Snapshot.EntityState.resource` маппится в `sprite/<n>`, `resource == -1` — в `sprite/player`.
+  Тайлы рисуются текстурированным ромбом, спрайты — текстурированными билбордами; при отсутствии
+  текстуры — цветной fallback.
+- **Маппинг ресурсов**: `rpg.engine.runtime.Sprites` хранит позицию id карты в алфавитно-отсортированном
+  списке `MapEntity`; dedicated-server, desktop local server и Android local server заполняют ресурс в снапшоте.
+- **Android-клиент**: `ClientSession` пропускает `PakList`/`PakChunk` до `Welcome` (растровое кэширование
+  и ассеты пока на десктопе).
+- **Пример**: `assets/basic.pak` — CC0-паки Kenney (изо-дungeon), `--pak assets/basic.pak` на сервере;
+  скрипт сборки в README.

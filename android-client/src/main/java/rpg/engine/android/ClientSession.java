@@ -31,11 +31,24 @@ final class ClientSession {
                 socket.setTcpNoDelay(true);
                 out = socket.getOutputStream();
                 Protocol.write(out, new Hello(name));
-                Packet p = Protocol.read(socket.getInputStream());
+                InputStream in = socket.getInputStream();
+                Packet p = Protocol.read(in);
+                if (p instanceof PakList pl && !pl.packs().isEmpty()) {
+                    for (PakList.PakSeq seq : pl.packs()) {
+                        int received = 0;
+                        while (received < seq.sizeBytes()) {
+                            Packet chunk = Protocol.read(in);
+                            if (!(chunk instanceof PakChunk c) || !c.name().equals(seq.name()))
+                                throw new IOException("corrupt pak stream for " + seq.name());
+                            received += c.data().length;
+                        }
+                    }
+                    p = Protocol.read(in);
+                }
                 if (!(p instanceof Welcome w)) throw new IOException("server rejected Hello");
                 listener.connected(w);
                 while (!socket.isClosed()) {
-                    Packet q = Protocol.read(socket.getInputStream());
+                    Packet q = Protocol.read(in);
                     if (q instanceof Snapshot s) listener.snapshot(s);
                     else if (q instanceof Notify n) listener.notify(n.text());
                     else if (q instanceof Dialog d) listener.dialog(d);

@@ -7,6 +7,7 @@ import rpg.engine.map.RMapIO;
 import rpg.engine.map.TileLayer;
 import rpg.engine.network.*;
 import rpg.engine.core.component.Transform;
+import rpg.engine.pak.PakAssets;
 
 import java.io.*;
 import java.nio.file.*;
@@ -37,13 +38,21 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
     private static final Path CONFIG_DIR = Path.of(System.getProperty("user.home"), ".openrpgator");
     private static final Path CONFIG_FILE = CONFIG_DIR.resolve("client.properties");
 
-    enum Screen { MENU, SETTINGS, GAME }
+    enum Screen { MENU, SETTINGS, LOADING, GAME }
     private volatile Screen screen = Screen.MENU;
 
     private static final int FIELD_CAPACITY = 512;
 
+    private static final Path PAK_CACHE_DIR = CONFIG_DIR.resolve("paks");
+
     private final LwjglRenderer renderer;
     private final DesktopClientSession session;
+
+    private final List<Path> loadedPaks = new ArrayList<>();
+    private volatile long pakReceived, pakTotal;
+    private volatile boolean pakDownloading;
+    private volatile String pakStatus = "";
+    private volatile PakAssets pakAssets = PakAssets.empty();
 
     private GameRuntime runtime;
     private RMap map;
@@ -93,6 +102,7 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
             switch (screen) {
                 case MENU -> renderMenu(w, h);
                 case SETTINGS -> renderSettings(w, h);
+                case LOADING -> renderLoading(w, h);
                 case GAME -> renderGame(w, h);
             }
 
@@ -212,10 +222,10 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
             localServer.setResourceDir(resourceDir);
             localServer.start(localPort);
             if (mapPath != null && localServer.runtime() != null) {
-                try { localServer.runtime().loadMap(mapPath); } catch (Exception e) { addToast("Map load error: " + e.getMessage()); }
+                try { localServer.runtime().loadMap(mapPath); localServer.refreshSprites(); } catch (Exception e) { addToast("Map load error: " + e.getMessage()); }
             }
             statusText = "Local server on " + localPort + " — connecting...";
-            session.connect("127.0.0.1", localPort, playerName);
+            beginConnect("127.0.0.1", localPort, playerName);
         } catch (Exception e) {
             statusText = "Failed: " + e.getMessage();
             addToast("Local server error: " + e.getMessage());
@@ -228,12 +238,24 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
         session.disconnect();
         localPlayerId.set(-1);
         statusText = "Local server stopped";
+        screen = Screen.MENU;
         addToast("Local server stopped");
     }
 
     private void connectRemote() {
         statusText = "Connecting to " + connectHost + ":" + connectPort + "...";
-        session.connect(connectHost, connectPort, playerName);
+        beginConnect(connectHost, connectPort, playerName);
+    }
+
+    private void beginConnect(String host, int port, String name) {
+        loadedPaks.clear();
+        pakReceived = 0;
+        pakTotal = 0;
+        pakDownloading = false;
+        pakStatus = "Connecting...";
+        connected = false;
+        screen = Screen.LOADING;
+        session.connect(host, port, name);
     }
 
     // ══════════════════════════════════════════════════════════════
@@ -327,6 +349,42 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
     }
 
     // ══════════════════════════════════════════════════════════════
+    //  LOADING SCREEN (handshake + pak download progress)
+    // ══════════════════════════════════════════════════════════════
+    private void renderLoading(int w, int h) {
+        renderer.begin(w, h);
+
+        double cx = w / 2.0, cy = h / 2.0;
+        renderer.text(cx - renderer.textWidth("openRPGator", 3) / 2, cy - 90, "openRPGator", 3, 0.9f, 0.8f, 0.3f);
+        renderer.text(cx - renderer.textWidth(pakStatus, 1) / 2, cy - 46, pakStatus, 1, 0.7f, 0.75f, 0.8f);
+
+        double bw = 420, bh = 26, bx = cx - bw / 2, by = cy - 16;
+        renderer.rect(bx, by, bw, bh, 0.1f, 0.12f, 0.16f, 0.95f);
+        renderer.rect(bx, by, bw, 2, 0.4f, 0.6f, 0.4f, 1f);
+        renderer.rect(bx, by + bh - 2, bw, 2, 0.4f, 0.6f, 0.4f, 1f);
+
+        if (pakDownloading && pakTotal > 0) {
+            double frac = Math.min(1.0, (double) pakReceived / pakTotal);
+            renderer.rect(bx + 3, by + 3, (bw - 6) * frac, bh - 6, 0.3f, 0.65f, 0.35f, 0.95f);
+            String pct = (int) (frac * 100) + "% (" + (pakReceived / 1024) + "/" + (pakTotal / 1024) + " KiB)";
+            renderer.text(cx - renderer.textWidth(pct, 1) / 2, by + (bh - 8) / 2, pct, 1, 0.92f, 0.95f, 0.9f);
+        } else {
+            renderer.text(cx - renderer.textWidth("establishing session...", 1) / 2,
+                    by + (bh - 8) / 2, "establishing session...", 1, 0.6f, 0.65f, 0.7f);
+        }
+
+        renderer.text(cx - renderer.textWidth("ESC = cancel", 1) / 2, by + bh + 20, "ESC = cancel", 1, 0.4f, 0.4f, 0.45f);
+
+        if (renderer.keyPressed(LwjglRenderer.KEY_ESCAPE)) {
+            session.disconnect();
+            connected = false;
+            screen = Screen.MENU;
+        }
+
+        renderer.text(8, h - 16, statusText, 1, 0.4f, 0.7f, 0.4f);
+    }
+
+    // ══════════════════════════════════════════════════════════════
     //  GAME SCREEN
     // ══════════════════════════════════════════════════════════════
     private void renderGame(int w, int h) {
@@ -395,8 +453,10 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
         }
 
         // Entities from snapshots
+        int fallbackPlayerSprite = pakAssets.spriteCount() > 0 ? pakAssets.playerSpriteIndex() : -1;
         for (Snapshot.EntityState e : snap.entities()) {
-            renderer.sprite(e.x(), e.y(), e.elevation(), 0);
+            int res = e.resource() < 0 ? fallbackPlayerSprite : e.resource();
+            renderer.sprite(e.x(), e.y(), e.elevation(), res);
         }
 
         // ── HUD (screen-space overlay) ───────────────────────────
@@ -511,18 +571,79 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
         localPlayerId.set(w.entityId());
         connected = true;
         statusText = "Connected #" + w.entityId();
-        screen = Screen.GAME;
         // Load map for tile rendering if not loaded yet
         if (map == null && mapPath != null) {
             try {
                 map = RMapIO.read(mapPath);
             } catch (Exception e) { addToast("Map load error: " + e.getMessage()); }
         }
+        // Load pak assets received during the handshake (sprites + tiles) into the renderer
+        if (!loadedPaks.isEmpty()) {
+            try {
+                pakAssets = PakAssets.fromPaks(loadedPaks.toArray(Path[]::new));
+                renderer.setTileImages(pakAssets.tileImages());
+                renderer.setSpriteImages(pakAssets.spriteImages());
+                addToast("Assets: " + pakAssets.tileCount() + " tiles, "
+                        + pakAssets.spriteCount() + " sprites");
+            } catch (Exception e) {
+                pakAssets = PakAssets.empty();
+                addToast("Asset load error: " + e.getMessage());
+            }
+        }
+        screen = Screen.GAME;
     }
 
     @Override public void onSnapshot(Snapshot s) { latestSnapshot.set(s); }
     @Override public void onNotify(Notify n) { addToast(n.text()); }
     @Override public void onDialog(Dialog d) { activeDialog = new ActiveDialog(d.dialogId(), d.text(), d.choices()); }
-    @Override public void onStatus(String s) { statusText = s; }
+    @Override public void onStatus(String s) {
+        statusText = s;
+        if (screen == Screen.LOADING) {
+            screen = Screen.MENU;
+            connected = false;
+        }
+    }
+
+    @Override public void onPakStart(long totalBytes) {
+        pakTotal = totalBytes;
+        pakReceived = 0;
+        pakDownloading = totalBytes > 0;
+        if (totalBytes == 0) loadedPaks.clear();
+        pakStatus = pakDownloading
+                ? "Downloading assets (" + (totalBytes / 1024) + " KiB)..."
+                : "Connecting, no assets to load...";
+    }
+
+    @Override public void onPakProgress(long received, long totalBytes) {
+        pakReceived = received;
+        pakStatus = "Downloading assets... " + (received * 100 / Math.max(1, totalBytes)) + "%";
+    }
+
+    @Override public boolean onPakCached(String name, long size) {
+        Path p = cachedPakPath(name);
+        if (p == null) return false;
+        try { return Files.exists(p) && Files.size(p) == size; }
+        catch (IOException e) { return false; }
+    }
+
+    @Override public void onPakDone(String name, byte[] data) {
+        Path p = cachedPakPath(name);
+        if (p == null) return;
+        try {
+            Files.createDirectories(p.getParent());
+            Files.write(p, data);
+            loadedPaks.add(p);
+            pakStatus = "Received " + name;
+        } catch (IOException e) {
+            addToast("Pak cache error: " + e.getMessage());
+        }
+    }
+
+    /** Resolves a server-announced pak name to the local cache path; null on unsafe names. */
+    private Path cachedPakPath(String name) {
+        if (name == null || name.isBlank() || name.contains("/") || name.contains("\\") || name.contains(".."))
+            return null;
+        return PAK_CACHE_DIR.resolve(name);
+    }
 
 }

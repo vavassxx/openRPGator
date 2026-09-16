@@ -16,6 +16,8 @@ import java.util.List;
  *   5  Notify(text)
  *   6  Dialog(dialogId, text, choices[])
  *   7  DialogResponse(dialogId, choice)
+ *   8  PakList(packs[])
+ *   9  PakChunk(name, offset, data)
  */
 public final class Protocol {
     private static final int MAX_FRAME_SIZE = 1 << 20;
@@ -36,6 +38,7 @@ public final class Protocol {
             for (Snapshot.EntityState e : p.entities()) {
                 data.writeLong(e.id()); data.writeDouble(e.x());
                 data.writeDouble(e.y()); data.writeDouble(e.elevation());
+                data.writeInt(e.resource());
             }
         } else if (packet instanceof Notify p) {
             writeString(data, p.text());
@@ -48,6 +51,17 @@ public final class Protocol {
         } else if (packet instanceof DialogResponse p) {
             data.writeLong(p.dialogId());
             data.writeInt(p.choice());
+        } else if (packet instanceof PakList p) {
+            data.writeInt(p.packs().size());
+            for (PakList.PakSeq seq : p.packs()) {
+                writeString(data, seq.name());
+                data.writeInt(seq.sizeBytes());
+            }
+        } else if (packet instanceof PakChunk p) {
+            writeString(data, p.name());
+            data.writeInt(p.offset());
+            data.writeInt(p.data().length);
+            data.write(p.data());
         } else {
             throw new IOException("Unsupported packet: " + packet.getClass());
         }
@@ -72,6 +86,8 @@ public final class Protocol {
             case 5 -> { return new Notify(readString(data)); }
             case 6 -> { return readDialog(data); }
             case 7 -> { return new DialogResponse(data.readLong(), data.readInt()); }
+            case 8 -> { return readPakList(data); }
+            case 9 -> { return readPakChunk(data); }
             default -> throw new IOException("Unknown packet type");
         }
     }
@@ -81,8 +97,27 @@ public final class Protocol {
         if (count < 0 || count > 100000) throw new IOException("Invalid snapshot entity count: " + count);
         List<Snapshot.EntityState> entities = new ArrayList<>(count);
         for (int i = 0; i < count; i++)
-            entities.add(new Snapshot.EntityState(in.readLong(), in.readDouble(), in.readDouble(), in.readDouble()));
+            entities.add(new Snapshot.EntityState(in.readLong(), in.readDouble(), in.readDouble(), in.readDouble(),
+                    in.readInt()));
         return new Snapshot(entities);
+    }
+
+    private static PakList readPakList(DataInputStream in) throws IOException {
+        int n = in.readInt();
+        if (n < 0 || n > 128) throw new IOException("Invalid pak list count: " + n);
+        List<PakList.PakSeq> packs = new ArrayList<>(n);
+        for (int i = 0; i < n; i++) packs.add(new PakList.PakSeq(readString(in), in.readInt()));
+        return new PakList(packs);
+    }
+
+    private static PakChunk readPakChunk(DataInputStream in) throws IOException {
+        String name = readString(in);
+        int offset = in.readInt();
+        int len = in.readInt();
+        if (len < 0 || len > MAX_FRAME_SIZE) throw new IOException("Invalid pak chunk length: " + len);
+        byte[] data = new byte[len];
+        in.readFully(data);
+        return new PakChunk(name, offset, data);
     }
 
     private static Dialog readDialog(DataInputStream in) throws IOException {
