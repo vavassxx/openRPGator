@@ -33,4 +33,6 @@ dependencies {
     implementation project(':engine-network')
     implementation project(':engine-runtime')
     implementation project(':pak')
+    // The embedded Android local server IS the PC server: same authoritative ServerHost/ServerConfig.
+    implementation project(':dedicated-server')
 }

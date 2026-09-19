@@ -36,6 +36,20 @@ class ProtocolTest {
         assertEquals(chunk.name(), chunkRt.name());
         assertEquals(chunk.offset(), chunkRt.offset());
         assertArrayEquals(chunk.data(), chunkRt.data());
+
+        UiLayout dialog = UiLayout.dialog(7, "Тело диалога", List.of("А", "Б", "В"));
+        UiLayout dialogRt = (UiLayout) roundTrip(dialog);
+        assertEquals(dialog.kind(), dialogRt.kind());
+        assertEquals(dialog.dialogId(), dialogRt.dialogId());
+        assertEquals(dialog.json(), dialogRt.json());
+        assertEquals("Тело диалога", dialogRt.bodyText());
+        assertEquals(List.of("А", "Б", "В"), dialogRt.choiceTexts());
+
+        UiLayout notify = UiLayout.notify("Тост");
+        UiLayout notifyRt = (UiLayout) roundTrip(notify);
+        assertEquals(UiLayout.KIND_NOTIFY, notifyRt.kind());
+        assertEquals("Тост", notifyRt.bodyText());
+        assertTrue(notifyRt.choiceTexts().isEmpty());
     }
 
     @Test

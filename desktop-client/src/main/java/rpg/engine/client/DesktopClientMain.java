@@ -34,6 +34,7 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
     private static final int DEFAULT_PORT = 27991;
     private static final String DEFAULT_HOST = "127.0.0.1";
     private static final String DEFAULT_NAME = "player";
+    private static final int DEFAULT_TICK_HZ = 20;
     private static final long TOAST_DURATION_MS = 4000;
 
     private static final Path CONFIG_DIR = Path.of(System.getProperty("user.home"), ".openrpgator");
@@ -58,15 +59,16 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
     private GameRuntime runtime;
     private RMap map;
     private Path mapPath;
-    private Path resourceDir;
     private DesktopLocalServer localServer;
     private int localPort = DEFAULT_PORT;
+    private int localTickRate = DEFAULT_TICK_HZ;
     private String connectHost = DEFAULT_HOST;
     private int connectPort = DEFAULT_PORT;
     private String playerName = DEFAULT_NAME;
     private Double zoomArg = null;
 
-    private SettingsField mapField, resourceField, nameField;
+    private SettingsField nameField;
+    private SettingsField tickRateField;
     private int focusedField; // index into settingsFields when on SETTINGS
 
     private final AtomicReference<Snapshot> latestSnapshot = new AtomicReference<>(new Snapshot(List.of()));
@@ -132,9 +134,9 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
                     if (i + 1 < args.length)
                         try { zoomArg = Double.parseDouble(args[++i]); } catch (NumberFormatException ignored) {}
                 }
-                default -> {
-                    if (args[i].endsWith(".rmap") && Files.exists(Path.of(args[i])))
-                        mapPath = Path.of(args[i]);
+                case "--local-tick-rate" -> {
+                    if (i + 1 < args.length)
+                        try { localTickRate = Integer.parseInt(args[++i]); } catch (NumberFormatException ignored) {}
                 }
             }
         }
@@ -154,12 +156,8 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
             } catch (IOException ignored) {}
         }
         playerName = cfg.getProperty("name", playerName);
-        String savedMap = cfg.getProperty("map");
-        if (savedMap != null && !savedMap.isBlank() && mapPath == null && Files.exists(Path.of(savedMap)))
-            mapPath = Path.of(savedMap);
-        String savedRes = cfg.getProperty("resources");
-        if (savedRes != null && !savedRes.isBlank()) resourceDir = Path.of(savedRes);
-        if (resourceDir == null && Files.isDirectory(DataDir.paks())) resourceDir = DataDir.paks();
+        String savedTick = cfg.getProperty("localTick");
+        try { if (savedTick != null) localTickRate = Integer.parseInt(savedTick); } catch (NumberFormatException ignored) {}
         String savedConnect = cfg.getProperty("connect");
         if (savedConnect != null && connectHost.equals(DEFAULT_HOST)) connectTo(savedConnect);
     }
@@ -169,9 +167,8 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
             Files.createDirectories(CONFIG_FILE.getParent());
             Properties cfg = new Properties();
             cfg.setProperty("name", playerName);
+            cfg.setProperty("localTick", String.valueOf(localTickRate));
             cfg.setProperty("connect", connectHost + ":" + connectPort);
-            if (mapPath != null) cfg.setProperty("map", mapPath.toString());
-            if (resourceDir != null) cfg.setProperty("resources", resourceDir.toString());
             try (OutputStream out = Files.newOutputStream(CONFIG_FILE)) { cfg.store(out, "openRPGator client config"); }
         } catch (IOException ignored) {}
     }
@@ -209,10 +206,9 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
     }
 
     private void openSettings() {
-        if (mapField == null) {
-            mapField = new SettingsField("Map file (.rmap)", mapPath == null ? "" : mapPath.toString());
-            resourceField = new SettingsField("Resources directory", resourceDir == null ? "" : resourceDir.toString());
+        if (nameField == null) {
             nameField = new SettingsField("Player name", playerName);
+            tickRateField = new SettingsField("Local server tick rate (Hz)", String.valueOf(localTickRate));
         }
         focusedField = 0;
         screen = Screen.SETTINGS;
@@ -220,22 +216,13 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
 
     private void startLocalServer() {
         try {
-            if (mapPath == null && Files.isDirectory(DataDir.maps())) {
-                List<Path> maps = DataDir.mapFiles();
-                if (maps.size() == 1) {
-                    mapPath = maps.get(0);
-                    addToast("Using map: " + mapPath.getFileName());
-                } else if (maps.size() > 1) {
-                    addToast("Multiple maps in data dir — pick one in Settings");
-                }
-            }
             if (localServer == null) localServer = new DesktopLocalServer();
-            localServer.setResourceDir(resourceDir);
+            localServer.setHostDir(DataDir.host());
+            localServer.setTickRate(localTickRate);
             localServer.start(localPort);
-            if (mapPath != null && localServer.runtime() != null) {
-                try { localServer.runtime().loadMap(mapPath); localServer.refreshSprites(); } catch (Exception e) { addToast("Map load error: " + e.getMessage()); }
-            }
-            statusText = "Local server on " + localPort + " — connecting...";
+            mapPath = localServer.autoMapPath();
+            if (mapPath != null) addToast("Host map: " + mapPath.getFileName());
+            statusText = "Local server on " + localPort + " @ " + localTickRate + " Hz — connecting...";
             beginConnect("127.0.0.1", localPort, playerName);
         } catch (Exception e) {
             statusText = "Failed: " + e.getMessage();
@@ -278,10 +265,10 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
         double cx = w / 2.0;
         double top = 80;
         renderer.text(cx - renderer.textWidth("Settings", 3) / 2, top, "Settings", 3, 0.9f, 0.8f, 0.3f);
-        renderer.text(cx - renderer.textWidth("Local server: map file and resources", 1) / 2,
-                top + 40, "Local server: map file and resources", 1, 0.6f, 0.6f, 0.65f);
+        renderer.text(cx - renderer.textWidth("Local server uses the data/host folder automatically", 1) / 2,
+                top + 40, "Local server uses the data/host folder automatically", 1, 0.6f, 0.6f, 0.65f);
 
-        SettingsField[] fields = { nameField, mapField, resourceField };
+        SettingsField[] fields = { nameField, tickRateField };
         double fw = 560, fh = 42, fX = cx - fw / 2, fY = top + 76;
         double gap = 62;
 
@@ -321,7 +308,7 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
     }
 
     private void updateSettingsFields() {
-        SettingsField[] fields = { nameField, mapField, resourceField };
+        SettingsField[] fields = { nameField, tickRateField };
         if (renderer.keyPressed(LwjglRenderer.KEY_TAB)) {
             focusedField = (focusedField + 1) % fields.length;
         }
@@ -338,13 +325,12 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
 
     private void applySettings() {
         playerName = nameField.value().isBlank() ? DEFAULT_NAME : nameField.value().trim();
-        String mapStr = mapField.value().trim();
-        if (!mapStr.isEmpty()) {
-            mapPath = Path.of(mapStr);
-            map = null; // force reload from new path
+        try {
+            localTickRate = Integer.parseInt(tickRateField.value().trim());
+            if (localTickRate < 1 || localTickRate > 240) throw new NumberFormatException();
+        } catch (NumberFormatException e) {
+            localTickRate = DEFAULT_TICK_HZ;
         }
-        String resStr = resourceField.value().trim();
-        resourceDir = resStr.isEmpty() ? null : Path.of(resStr);
         statusText = "Settings saved";
         addToast("Settings applied");
         saveConfig();
@@ -605,8 +591,13 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
     }
 
     @Override public void onSnapshot(Snapshot s) { latestSnapshot.set(s); }
-    @Override public void onNotify(Notify n) { addToast(n.text()); }
-    @Override public void onDialog(Dialog d) { activeDialog = new ActiveDialog(d.dialogId(), d.text(), d.choices()); }
+    @Override public void onUi(UiLayout u) {
+        if (UiLayout.KIND_NOTIFY.equals(u.kind())) {
+            addToast(u.bodyText());
+        } else if (UiLayout.KIND_DIALOG.equals(u.kind())) {
+            activeDialog = new ActiveDialog(u.dialogId(), u.bodyText(), u.choiceTexts());
+        }
+    }
     @Override public void onStatus(String s) {
         statusText = s;
         if (screen == Screen.LOADING) {

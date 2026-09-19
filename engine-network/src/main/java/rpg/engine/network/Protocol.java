@@ -18,6 +18,7 @@ import java.util.List;
  *   7  DialogResponse(dialogId, choice)
  *   8  PakList(packs[])
  *   9  PakChunk(name, offset, data)
+ *   10 UiLayout(kind, dialogId, json) — layout + strings UI document
  */
 public final class Protocol {
     private static final int MAX_FRAME_SIZE = 1 << 20;
@@ -62,6 +63,10 @@ public final class Protocol {
             data.writeInt(p.offset());
             data.writeInt(p.data().length);
             data.write(p.data());
+        } else if (packet instanceof UiLayout p) {
+            writeString(data, p.kind());
+            data.writeLong(p.dialogId());
+            writeString(data, p.json());
         } else {
             throw new IOException("Unsupported packet: " + packet.getClass());
         }
@@ -88,6 +93,7 @@ public final class Protocol {
             case 7 -> { return new DialogResponse(data.readLong(), data.readInt()); }
             case 8 -> { return readPakList(data); }
             case 9 -> { return readPakChunk(data); }
+            case 10 -> { return new UiLayout(readString(data), data.readLong(), readString(data)); }
             default -> throw new IOException("Unknown packet type");
         }
     }

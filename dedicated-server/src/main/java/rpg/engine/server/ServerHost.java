@@ -5,6 +5,7 @@ import rpg.engine.core.component.*;
 import rpg.engine.core.ecs.EntityId;
 import rpg.engine.core.math.WorldPosition;
 import rpg.engine.network.*;
+import rpg.engine.pak.PakAssets;
 import rpg.engine.pak.PakStreamer;
 import rpg.engine.world.InteractRequestedEvent;
 import rpg.engine.script.UiSink;
@@ -18,16 +19,26 @@ import java.util.concurrent.*;
 /**
  * Headless authoritative server host. Owns one {@link GameRuntime}, accepts TCP clients,
  * broadcasts {@link Snapshot}s, routes {@link Input} into the world and pushes UI events
- * ({@link Notify}, {@link Dialog}) to the players that Lua scripts target.
+ * ({@link UiLayout}) to the players that Lua scripts target.
  *
- * <p>Instance-based so it can be embedded either from the CLI ({@link ServerMain}) or from a
- * Swing admin UI, with lifecycle controlled through {@link #start}/{@link #stop}.
+ * <p>Instance-based so it can be embedded either from the CLI ({@link ServerMain}), a Swing
+ * admin UI or the Android/desktop clients' local server, with lifecycle controlled through
+ * {@link #start}/{@link #stop}. Uses only Java 17 APIs so the same class runs on Android.
  */
 public final class ServerHost {
 
-    /** What a server run needs. Map/pak paths are already resolved (see {@link ServerConfig}). */
-    public record Config(Path map, List<Path> paks, int port) {
-        public Config { if (paks == null) paks = List.of(); }
+    /**
+     * What a server run needs. Map/pak paths are already resolved (see {@link ServerConfig}).
+     *
+     * @param tickHz world tick rate in Hz (≡ 1000/tickHz ms per tick); 0 or negative falls back to
+     *               the {@link ServerConfig#DEFAULT_TICK_HZ default}, always clamped to 1..240
+     */
+    public record Config(Path map, List<Path> paks, int port, int tickHz) {
+        public Config {
+            if (paks == null) paks = List.of();
+            if (tickHz <= 0) tickHz = ServerConfig.DEFAULT_TICK_HZ;
+            tickHz = Math.max(1, Math.min(240, tickHz));
+        }
     }
 
     /** Receives human-readable operational messages (map load, listener address, pak list). */
@@ -38,7 +49,12 @@ public final class ServerHost {
 
     private final Listener listener;
     private final Map<Long, Client> clients = new ConcurrentHashMap<>();
-    private final ExecutorService exec = Executors.newVirtualThreadPerTaskExecutor();
+    /**
+     * One thread per connected client. A cached pool (not Java-21 virtual threads, which are
+     * unavailable on Android) keeps this class runnable inside the Android client, where the same
+     * server code is embedded via {@code LocalServerBackend}.
+     */
+    private ExecutorService exec;
     private volatile GameRuntime runtime;
     private volatile boolean running;
     private ServerSocket server;
@@ -64,25 +80,29 @@ public final class ServerHost {
         if (cfg.map() != null && Files.isRegularFile(cfg.map())) {
             try {
                 runtime.loadMap(cfg.map());
-                sprites = Sprites.byPrefab(runtime.map());
-                listener.log("Loaded map: " + cfg.map().getFileName()
-                        + " (" + sprites.size() + " prefabs)");
+                listener.log("Loaded map: " + cfg.map().getFileName());
             } catch (Exception e) {
                 listener.error("Failed to load map " + cfg.map() + ": " + e.getMessage());
             }
         } else if (cfg.map() != null) {
             listener.error("Map file not found: " + cfg.map());
         }
+        sprites = spriteKeys(cfg.paks());
+        if (sprites.isEmpty() && runtime.map() != null) sprites = Sprites.byPrefab(runtime.map());
+        else if (runtime.map() != null) sprites = Sprites.byPrefabInPak(runtime.map(), sprites);
         if (!pakFiles.isEmpty()) {
             listener.log("Will stream " + pakFiles.size() + " pak(s): "
                     + pakFiles.stream().map(p -> p.getFileName().toString()).toList());
         }
 
+        long tickMs = Math.max(1, Math.round(1000.0 / cfg.tickHz()));
         tick = Executors.newSingleThreadScheduledExecutor();
         tick.scheduleAtFixedRate(() -> {
             try { runtime.tick(); } catch (Throwable t) { t.printStackTrace(); }
-        }, 0, 50, TimeUnit.MILLISECONDS);
+        }, 0, tickMs, TimeUnit.MILLISECONDS);
+        listener.log("World tick @ " + cfg.tickHz() + " Hz (" + tickMs + " ms)");
 
+        exec = Executors.newCachedThreadPool();
         server = new ServerSocket(cfg.port());
         server.setReuseAddress(true);
         running = true;
@@ -154,6 +174,15 @@ public final class ServerHost {
         return id;
     }
 
+    /** Sprite index map derived from the pak order the clients will load (see PakAssets). */
+    private Map<String, Integer> spriteKeys(List<Path> paks) {
+        try {
+            return PakAssets.spriteKeyIndex(paks.toArray(Path[]::new));
+        } catch (IOException e) {
+            return Map.of();
+        }
+    }
+
     private void destroyPlayer(Long id) {
         runtime.world().entities().destroy(new EntityId(id));
     }
@@ -192,16 +221,16 @@ public final class ServerHost {
     private UiSink uiSink() {
         return new UiSink() {
             @Override public void broadcastNotify(String text) {
-                for (Client c : clients.values()) c.send(new Notify(text));
+                for (Client c : clients.values()) c.send(UiLayout.notify(text));
             }
             @Override public void notifyTo(long playerEntityId, String text) {
                 Client c = clients.get(playerEntityId);
-                if (c != null) c.send(new Notify(text));
+                if (c != null) c.send(UiLayout.notify(text));
             }
             @Override public void dialogTo(long playerEntityId, long dialogId, String text,
                                            List<String> choices, UiSink.DialogCallback callback) {
                 Client c = clients.get(playerEntityId);
-                if (c != null) c.send(new Dialog(dialogId, text, choices));
+                if (c != null) c.send(UiLayout.dialog(dialogId, text, choices));
             }
             @Override public void clearDialogs(long playerEntityId) { }
         };

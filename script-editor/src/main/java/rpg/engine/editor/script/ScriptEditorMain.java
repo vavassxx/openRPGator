@@ -63,7 +63,7 @@ public final class ScriptEditorMain {
     }
 
     private void open() {
-        JFileChooser fc = chooser("Open Lua script", DataDir.maps().toFile(), "lua");
+        JFileChooser fc = chooser("Open Lua script", DataDir.host().toFile(), "lua");
         if (fc.showOpenDialog(frame) != JFileChooser.APPROVE_OPTION) return;
         Path p = fc.getSelectedFile().toPath();
         try {
@@ -85,7 +85,7 @@ public final class ScriptEditorMain {
 
     private void saveAs() {
         JFileChooser fc = chooser("Save Lua script",
-                current == null ? DataDir.maps().toFile() : current.getParent().toFile(), "lua");
+                current == null ? DataDir.host().toFile() : current.getParent().toFile(), "lua");
         if (fc.showSaveDialog(frame) != JFileChooser.APPROVE_OPTION) return;
         Path p = fc.getSelectedFile().toPath();
         if (!p.toString().endsWith(".lua")) p = Path.of(p.toString() + ".lua");

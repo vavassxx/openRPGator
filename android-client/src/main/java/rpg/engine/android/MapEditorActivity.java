@@ -17,7 +17,7 @@ import rpg.engine.map.*;
 
 /**
  * A deliberately dependency-light Android .rmap editor: no engine renderer, no OpenGL, no desktop
- * UI. Tiles and entity sprites preview from the shared data folder ({@code data/paks}); entities
+ * UI. Tiles and entity sprites preview from the shared host folder ({@code data/host}); entities
  * are placed with an explicit sprite/prefab binding and their prefab/script can be edited with a
  * long-press.
  */
@@ -166,7 +166,7 @@ public final class MapEditorActivity extends Activity {
             RMapIO.write(editor.map, out);
             appStorage.saveMap(editor.map.name() + ".rmap", out.toByteArray());
             logger.info("Saved map: " + editor.map.name());
-            Toast.makeText(this, "Saved to application data/maps", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "Saved to data/host", Toast.LENGTH_SHORT).show();
         } catch (Exception e) {
             logger.error("Failed to save map: " + editor.map.name(), e);
             Toast.makeText(this, "RMAP save: " + e.getMessage(), Toast.LENGTH_LONG).show();

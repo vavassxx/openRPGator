@@ -3,25 +3,22 @@ package rpg.engine.server;
 import rpg.engine.core.io.DataDir;
 
 import java.nio.file.Path;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.concurrent.CountDownLatch;
 
 /**
  * Headless authoritative dedicated server entry point.
  *
  * <pre>
- *   --data-dir PATH       data directory (default ~/.openrpgator/data)
- *   --map FILE            .rmap; bare name resolves against &lt;data-dir&gt;/maps
- *   --pak FILE[.pak]      repeatable; bare name resolves against &lt;data-dir&gt;/paks,
- *                         directories stream all *.pak inside them
- *   --port PORT           listen port (default 27800)
+ *   --data-dir PATH        data directory (default ~/.openrpgator/data)
+ *   --port PORT            listen port (default 27800)
+ *   --tick-rate HZ         world tick rate in Hz (default 20, 1..240)
  *   --help
  * </pre>
  *
- * With no {@code --map} the server serves the single map found under the data maps directory;
- * with no {@code --pak} it streams every pack under the data paks directory. Pressing Ctrl+C
- * (or SIGTERM) stops the server cleanly.
+ * The server content lives in the {@code host} sub-folder of the data directory: the single
+ * {@code *.rmap} there is auto-selected, every {@code *.pak} is streamed to clients and Lua
+ * scripts next to the map are pulled in automatically. Pressing Ctrl+C (or SIGTERM) stops the
+ * server cleanly.
  */
 public final class ServerMain {
 
@@ -29,24 +26,22 @@ public final class ServerMain {
 
     public static void main(String[] args) throws Exception {
         Path dataDir = DataDir.root();
-        boolean mapGiven = false;
-        String mapRef = null;
-        boolean paksGiven = false;
-        List<String> pakRefs = new ArrayList<>();
         int port = DEFAULT_PORT;
+        int tickHz = ServerConfig.DEFAULT_TICK_HZ;
 
         for (int i = 0; i < args.length; i++) {
             switch (args[i]) {
                 case "--data-dir" -> dataDir = Path.of(args[++i]);
-                case "--map" -> { mapRef = args[++i]; mapGiven = true; }
-                case "--pak" -> { pakRefs.add(args[++i]); paksGiven = true; }
                 case "--port" -> port = Integer.parseInt(args[++i]);
+                case "--tick-rate" -> {
+                    try { tickHz = Integer.parseInt(args[++i]); }
+                    catch (NumberFormatException e) { System.err.println("Invalid --tick-rate: " + args[i]); }
+                }
                 case "--help" -> {
                     System.out.println("""
                             --data-dir PATH   data directory (default ~/.openrpgator/data)
-                            --map FILE        .rmap; bare name resolves against <data-dir>/maps
-                            --pak FILE[.pak]  repeatable; dirs stream all *.pak inside them
                             --port PORT       listen port (default 27800)
+                            --tick-rate HZ    world tick rate in Hz (default 20, 1..240)
                             --help""");
                     return;
                 }
@@ -54,9 +49,7 @@ public final class ServerMain {
             }
         }
 
-        ServerHost.Config cfg = ServerConfig.resolve(dataDir,
-                new ServerConfig.Criteria(mapGiven, mapRef, paksGiven, pakRefs, port),
-                System.err::println);
+        ServerHost.Config cfg = ServerConfig.resolve(dataDir, port, tickHz, System.err::println);
 
         ServerHost host = new ServerHost(System.out::println);
         host.start(cfg);

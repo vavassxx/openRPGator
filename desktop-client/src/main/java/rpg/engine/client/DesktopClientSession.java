@@ -18,8 +18,7 @@ final class DesktopClientSession {
     interface Listener {
         void onConnected(Welcome w);
         void onSnapshot(Snapshot s);
-        void onNotify(Notify n);
-        void onDialog(Dialog d);
+        void onUi(UiLayout u);
         void onStatus(String s);
         void onPakStart(long totalBytes);            // total pak bytes expected (0 = none)
         void onPakProgress(long received, long totalBytes);
@@ -85,8 +84,10 @@ final class DesktopClientSession {
                     Packet q = Protocol.read(in);
                     switch (q) {
                         case Snapshot snap -> listener.onSnapshot(snap);
-                        case Notify n -> listener.onNotify(n);
-                        case Dialog d -> listener.onDialog(d);
+                        case UiLayout u -> listener.onUi(u);
+                        // legacy push-UI packets, kept for compatibility with older servers
+                        case Notify n -> listener.onUi(UiLayout.notify(n.text()));
+                        case Dialog d -> listener.onUi(UiLayout.dialog(d.dialogId(), d.text(), d.choices()));
                         default -> {}
                     }
                 }

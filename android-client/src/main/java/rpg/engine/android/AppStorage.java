@@ -5,6 +5,7 @@ import android.net.Uri;
 
 import java.io.*;
 import java.util.Arrays;
+import java.util.List;
 
 /**
  * App-specific external storage. The app data root is {@link Context#getExternalFilesDir}
@@ -46,14 +47,21 @@ public final class AppStorage {
                 OpenRpgatorDocumentsProvider.AUTHORITY, rootFile().getAbsolutePath());
     }
 
-    // ── Data dir (shared layout: data/maps, data/paks) ──────────
+    // ── Data dir layout ─────────────────────────────────────────
+    // data/host      server content: *.rmap maps, *.lua scripts, *.pak packs (same as desktop)
+    // data/pakcache  client-side cache of packs downloaded from remote servers
     public File dataDir(){
         File d = new File(rootFile(), "data");
         if(!d.exists()) d.mkdirs();
         return d;
     }
-    public File paksDir(){
-        File d = new File(dataDir(), "paks");
+    public File hostDir(){
+        File d = new File(dataDir(), "host");
+        if(!d.exists()) d.mkdirs();
+        return d;
+    }
+    public File pakCacheDir(){
+        File d = new File(dataDir(), "pakcache");
         if(!d.exists()) d.mkdirs();
         return d;
     }
@@ -62,8 +70,8 @@ public final class AppStorage {
     public File privateLogFile(String name){ File d=new File(rootFile(),"logs"); d.mkdirs(); return new File(d,name); }
     public OutputStream createLog(String name) throws IOException { return new FileOutputStream(privateLogFile(name),true); }
 
-    // ── Maps ─────────────────────────────────────────────────────
-    private File mapsDir(){ File d = new File(dataDir(), "maps"); if(!d.exists()) d.mkdirs(); return d; }
+    // ── Maps (server host folder) ────────────────────────────────
+    private File mapsDir(){ return hostDir(); }
     public void saveMap(String name, byte[] data) throws IOException { try(FileOutputStream out=new FileOutputStream(new File(mapsDir(),safeName(name)))){out.write(data);} }
     public byte[] loadMap(String name) throws IOException { File f=new File(mapsDir(),safeName(name)); if(!f.isFile()) return null; try(InputStream in=new FileInputStream(f)){return readAll(in);} }
     public File mapFile(String name) { return new File(mapsDir(), safeName(name)); }
@@ -76,12 +84,31 @@ public final class AppStorage {
         return names;
     }
 
-    /** Sorted {@code *.pak} files from {@code data/paks} (same shared layout as desktop). */
-    public File[] pakFiles() {
-        File[] files = paksDir().listFiles((dir, n) -> n.endsWith(".pak"));
+    /** Sorted {@code *.pak} files inside the host folder (server-streamed content). */
+    public File[] hostPaks() {
+        File[] files = hostDir().listFiles((dir, n) -> n.endsWith(".pak"));
         if (files == null || files.length == 0) return new File[0];
         Arrays.sort(files, (a, b) -> a.getName().compareToIgnoreCase(b.getName()));
         return files;
+    }
+
+    /**
+     * Sorted {@code *.pak} files for the client atlas: host packs first (local server content),
+     * then packs cached from remote servers. Duplicate names prefer the host copy.
+     */
+    public File[] pakFiles() {
+        List<File> out = new java.util.ArrayList<>();
+        for (File f : hostPaks()) out.add(f);
+        File[] cache = pakCacheDir().listFiles((dir, n) -> n.endsWith(".pak"));
+        if (cache != null) {
+            Arrays.sort(cache, (a, b) -> a.getName().compareToIgnoreCase(b.getName()));
+            for (File f : cache) {
+                boolean dup = false;
+                for (File g : out) if (g.getName().equals(f.getName())) { dup = true; break; }
+                if (!dup) out.add(f);
+            }
+        }
+        return out.toArray(new File[0]);
     }
 
     private static String safeName(String n){return n==null||n.trim().isEmpty()?"map.rmap":n.replaceAll("[\\\\/:*?\"<>|]","_");}

@@ -9,9 +9,10 @@ import rpg.engine.pak.PakImage;
 
 /**
  * Pak-backed texture atlas for the Android map editor. Loads {@code tile/*} and {@code sprite/*}
- * entries from the shared data folder ({@code data/paks}) and converts the raw RGBA rasters to
- * {@link Bitmap}s. Indices match the runtime contract: tile id / entity resource are indexes into
- * the sorted {@code tile/*} / {@code sprite/*} arrays (see {@link PakAssets}).
+ * entries from the shared host folder ({@code data/host}, plus packs cached from remote servers)
+ * and converts the raw RGBA rasters to {@link Bitmap}s. Indices match the runtime contract:
+ * tile id / entity resource are indexes into the sorted {@code tile/*} / {@code sprite/*} arrays
+ * (see {@link PakAssets}).
  */
 final class PakAtlas {
 

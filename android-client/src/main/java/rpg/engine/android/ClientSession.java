@@ -7,20 +7,27 @@ import java.util.*;
 import java.util.concurrent.*;
 import rpg.engine.network.*;
 
+/**
+ * Blocking-IO TCP client: handshake (Hello → [PakList+PakChunks] → Welcome), then snapshots
+ * and push-UI events. Downloaded packs are written to the client pak cache
+ * ({@code data/pakcache}) so a reconnect to the same server skips downloading again, and the
+ * atlas reloads via {@link Listener#pakLoaded(String)}.
+ */
 final class ClientSession {
     interface Listener {
         void connected(Welcome w);
         void snapshot(Snapshot s);
-        void notify(String text);
-        void dialog(Dialog d);
+        void ui(UiLayout u);
+        void pakLoaded(String name); // a pak finished buffering to the cache
         void status(String s);
     }
     private final Listener listener;
+    private final File pakCacheDir;
     private Socket socket;
     private OutputStream out;
     private final Object lock = new Object();
 
-    ClientSession(Listener l) { listener = l; }
+    ClientSession(Listener l, File pakCacheDir) { listener = l; this.pakCacheDir = pakCacheDir; }
 
     void connect(String host, int port, String name) {
         disconnect();
@@ -36,13 +43,18 @@ final class ClientSession {
                 Packet p = Protocol.read(in);
                 if (p instanceof PakList pl && !pl.packs().isEmpty()) {
                     for (PakList.PakSeq seq : pl.packs()) {
-                        int received = 0;
-                        while (received < seq.sizeBytes()) {
-                            Packet chunk = Protocol.read(in);
-                            if (!(chunk instanceof PakChunk c) || !c.name().equals(seq.name()))
-                                throw new IOException("corrupt pak stream for " + seq.name());
-                            received += c.data().length;
+                        long received = 0;
+                        File target = pakCacheFile(seq.name());
+                        try (FileOutputStream fos = new FileOutputStream(target)) {
+                            while (received < seq.sizeBytes()) {
+                                Packet chunk = Protocol.read(in);
+                                if (!(chunk instanceof PakChunk c) || !c.name().equals(seq.name()))
+                                    throw new IOException("corrupt pak stream for " + seq.name());
+                                fos.write(c.data());
+                                received += c.data().length;
+                            }
                         }
+                        listener.pakLoaded(seq.name());
                     }
                     p = Protocol.read(in);
                 }
@@ -51,13 +63,20 @@ final class ClientSession {
                 while (!socket.isClosed()) {
                     Packet q = Protocol.read(in);
                     if (q instanceof Snapshot s) listener.snapshot(s);
-                    else if (q instanceof Notify n) listener.notify(n.text());
-                    else if (q instanceof Dialog d) listener.dialog(d);
+                    else if (q instanceof UiLayout u) listener.ui(u);
+                    // legacy push-UI packets, kept for compatibility with older servers
+                    else if (q instanceof Notify n) listener.ui(UiLayout.notify(n.text()));
+                    else if (q instanceof Dialog d) listener.ui(UiLayout.dialog(d.dialogId(), d.text(), d.choices()));
                 }
             } catch (Exception e) {
                 listener.status("Disconnected: " + e.getMessage());
             }
         }).start();
+    }
+
+    private File pakCacheFile(String name) {
+        String safe = name.replaceAll("[\\\\/:*?\"<>|]", "_");
+        return new File(pakCacheDir, safe);
     }
 
     void input(double dx, double dy, int actions) {

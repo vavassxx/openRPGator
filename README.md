@@ -16,14 +16,15 @@ Java 21, server-authoritative, 2.5D/isometric RPG engine targeting Linux/Windows
   Lua script editor tab, undo/redo) and standalone script editor
 - Swing admin console for the dedicated server (`server-admin`)
 - desktop software renderer/client with no native dependency in the core
-- desktop client settings screen (map file + resources directory for the built-in local server)
+- desktop client settings screen (player name only — the built-in local server runs from the shared
+  `data/host` folder automatically)
 - `.pak` asset packs: PNG rasters packed into a binary container, streamed to clients during the
-  connection handshake, cached locally (`~/.openrpgator/paks`) with a download progress screen, and
-  rendered as entity sprites / tile textures by the desktop client
+  connection handshake, cached locally (`~/.openrpgator/data/pakcache`) with a download progress
+  screen, and rendered as entity sprites / tile textures by the desktop and Android clients
 
 ## Build
 
-GitHub Actions builds the Linux x86_64/arm64 distributions and the universal Android map-editor APK. Locally, any Gradle 8.7.x installation can be used:
+GitHub Actions builds the Linux x86_64/arm64 distributions and the universal Android APK. Locally, any Gradle 8.7.x installation can be used:
 
     gradle build
 
@@ -31,41 +32,44 @@ The server can be run with:
 
     gradle :dedicated-server:installDist
     ./dedicated-server/build/install/dedicated-server/bin/dedicated-server \
-        --map examples/village.rmap --port 27800
+        --data-dir examples --port 27800
 
-Or from the Swing admin console (same flags, saved to `~/.openrpgator/server.properties`):
+Or from the Swing admin console (data dir + port persisted to `~/.openrpgator/server.properties`):
 
     gradle :server-admin:installDist
     ./server-admin/build/install/server-admin/bin/server-admin
 
-To stream visual assets to clients, build the pack with `PakTool` and pass it to the server:
+Server content lives in the `host` sub-folder of the data directory: the single `*.rmap` there is
+auto-selected, every `*.pak` is streamed to clients during the handshake and Lua scripts next to the
+map are loaded automatically. There is no per-map/per-pack selection anymore.
+
+To rebuild the visual assets from the PNG sources:
 
     gradle :pak:installDist
     java -cp "pak/build/install/pak/lib/*" rpg.engine.pak.PakTool pack \
-        --root assets-src --out assets/basic.pak --resize 32x64
-    ./dedicated-server/build/install/dedicated-server/bin/dedicated-server \
-        --map examples/host/town.rmap --pak assets/basic.pak --port 27800
-
-The desktop client shows a loading screen with progress while packs are downloaded and caches
-them under `~/.openrpgator/paks` (re-skipped by name+size on later connects).
+        --root assets-src --out assets/basic.pak \
+        --resize sprite=32x64 --resize tile=32x16
 
 ### Shared data directory
 
-The server-tools and the desktop client's built-in local server share `~/.openrpgator/data`:
+All desktop tooling and the clients share `~/.openrpgator/data` (Android uses the same layout
+`<app-files>/data`):
 
-- `data/maps` — `.rmap` maps; used as the default folder for the map/script editors and the
-  default server map (a single map found there is started automatically).
-- `data/paks` — `.pak` asset packs; auto-loaded for texture previews in the editor and streamed
-  by the server when no `--pak` is given.
+- `data/host` — server content folder. Drop the map (`*.rmap`), Lua scripts (`.lua` next to the
+  map) and packs (`*.pak`) here; servers auto-select the single map and stream every pack.
+- `data/pakcache` — client-side cache of packs downloaded from remote servers (re-skipped by name
+  on later connects).
+- Legacy `data/maps` / `data/paks` folders are migrated into `data/host` on first run.
 
-The server accepts `--data-dir <dir>` to point at a different root; `--map x.rmap` / `--pak p.pak`
-are resolved against it, and `--pak <dir>` streams every pack found in that directory. The Android
-editor uses the same layout inside its app folder (`data/maps`, `data/paks`).
+The server accepts `--data-dir <dir>` to point at a different root (it must contain a `host`
+sub-folder). The map/script editors save into `data/host` as well.
 
-Sprite indices refer to `sprite/<n>` entries keyed by the alphabetically sorted entity *prefabs*;
-the editor binds a texture by setting an entity's prefab to a sprite key. `sprite/player` is used
-for entities the engine marks with resource `-1`. Assets in `assets/` are CC0-licensed (Kenney —
-see `assets-src/KENNEY_CC0_LICENSE.txt`).
+Sprite indices refer to `sprite/<n>` entries: the client builds its sprite array from the sorted
+union of `sprite/*` keys across all packs (`sprite/player` is used for entities the engine marks
+with resource `-1`), and the servers derive the same indices from the host packs. When no packs are
+present the engine falls back to prefab-sorted indices and flat color fills. Assets in `assets/` are
+CC0-licensed (Kenney — see `assets-src/KENNEY_CC0_LICENSE.txt`). Demo tiles `tile/0..11` are packed
+into `basic.pak` so clients render textured iso tiles with a color fill as a fallback.
 
 A fully scripted test host (NPCs, dialogues, triggers, teleports, patrols) lives in `examples/host/`
 — see [examples/host/README.md](examples/host/README.md) for the runbook and the open work items.
@@ -78,8 +82,10 @@ Every push runs `.github/workflows/build.yml`. It produces:
 
 - `openRPGator-linux-x86_64.tar.gz` — server, server-admin, Swing map editor and desktop client with x86_64 LWJGL natives.
 - `openRPGator-linux-arm64.tar.gz` — server, server-admin, Swing map editor and desktop client with ARM64 LWJGL natives.
-- `openRPGator-map-editor-universal.apk` — the Android-native `.rmap` map editor as a universal APK.
-The Android application is currently the map editor; there is not yet a separate Android client or Android server application. The JVM server itself is headless and can run directly under Termux on ARM64.
+- `openRPGator-map-editor-universal.apk` — the Android app (map editor, game client view and embedded
+  local server). The Android client connects over TCP like the desktop client and can host a local
+  server from `data/host`; a separate foreground-service wrapper is still pending. The JVM server
+  itself is headless and can run directly under Termux on ARM64.
 
 ## License
 

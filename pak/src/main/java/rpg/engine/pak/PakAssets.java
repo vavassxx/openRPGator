@@ -78,6 +78,24 @@ public final class PakAssets {
     }
 
     /**
+     * Maps each {@code sprite/*} short key (sorted union across paks) to its zero-based sprite
+     * index — exactly the ordering the client builds from {@link #fromPaks}. Servers use this to
+     * emit {@code Snapshot.EntityState.resource()} values that always match the client's sprite
+     * array, even when a pak is missing some entries (e.g. {@code sprite/7} absent).
+     */
+    public static Map<String, Integer> spriteKeyIndex(Path... pakFiles) throws IOException {
+        TreeSet<String> keys = new TreeSet<>();
+        for (Path path : pakFiles) {
+            if (path == null || !Files.exists(path)) continue;
+            for (String n : PakFile.readIndex(path).namesByPrefix("sprite/")) keys.add(n.substring(7));
+        }
+        Map<String, Integer> out = new HashMap<>();
+        int i = 0;
+        for (String k : keys) out.put(k, i++);
+        return out;
+    }
+
+    /**
      * Quick scan: returns the number of tile and sprite entries that would be loaded from
      * these pak files, without decoding the actual RGBA rasters (index-only read).
      */

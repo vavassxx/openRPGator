@@ -230,7 +230,7 @@ public final class EditorFrame extends JFrame {
     }
 
     private void open() {
-        JFileChooser fc = chooser("Open map", DataDir.maps().toFile(), "rmap");
+        JFileChooser fc = chooser("Open map", DataDir.host().toFile(), "rmap");
         if (fc.showOpenDialog(this) != JFileChooser.APPROVE_OPTION) return;
         try {
             RMap m = RMapIO.read(fc.getSelectedFile().toPath());
@@ -259,7 +259,7 @@ public final class EditorFrame extends JFrame {
     }
 
     private void saveAs() {
-        JFileChooser fc = chooser("Save map as", mapPath == null ? DataDir.maps().toFile() : mapPath.getParent().toFile(), "rmap");
+        JFileChooser fc = chooser("Save map as", mapPath == null ? DataDir.host().toFile() : mapPath.getParent().toFile(), "rmap");
         if (fc.showSaveDialog(this) != JFileChooser.APPROVE_OPTION) return;
         Path p = fc.getSelectedFile().toPath();
         if (!p.toString().endsWith(".rmap")) p = Path.of(p.toString() + ".rmap");
@@ -277,14 +277,14 @@ public final class EditorFrame extends JFrame {
     // ── Assets ────────────────────────────────────────────────────
     private void autoLoadPaks() {
         try { DataDir.ensure(); } catch (IOException ignored) {}
-        for (Path p : DataDir.pakFiles()) visuals.add(p);
+        for (Path p : DataDir.hostPaks()) visuals.add(p);
         refreshPalette();
         if (!visuals.pakPaths().isEmpty())
-            status("Loaded " + visuals.pakPaths().size() + " pak(s) from data dir");
+            status("Loaded " + visuals.pakPaths().size() + " pak(s) from data/host");
     }
 
     private void loadPaks() {
-        JFileChooser fc = new JFileChooser(DataDir.paks().toFile());
+        JFileChooser fc = new JFileChooser(DataDir.host().toFile());
         fc.setMultiSelectionEnabled(true);
         fc.setFileFilter(new FileNameExtensionFilter("Asset packs", "pak"));
         if (fc.showOpenDialog(this) != JFileChooser.APPROVE_OPTION) return;
@@ -537,7 +537,7 @@ public final class EditorFrame extends JFrame {
             if (e.script() != null && !e.script().isBlank()) names.add(e.script());
         Path dir = mapPath == null ? null : mapPath.getParent();
         if (dir != null) for (Path p : DataDir.listIn(dir, ".lua")) names.add(p.getFileName().toString());
-        scriptPane.refreshScripts(List.copyOf(names), dir == null ? DataDir.maps() : dir);
+        scriptPane.refreshScripts(List.copyOf(names), dir == null ? DataDir.host() : dir);
     }
 
     private void status(String s) {

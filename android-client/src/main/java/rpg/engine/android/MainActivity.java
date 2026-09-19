@@ -15,7 +15,7 @@ import rpg.engine.android.controls.*;
 import rpg.engine.network.Input;
 import rpg.engine.network.Snapshot;
 import rpg.engine.network.Welcome;
-import rpg.engine.network.Dialog;
+import rpg.engine.network.UiLayout;
 
 public final class MainActivity extends Activity implements ClientSession.Listener {
     private ControlLayout controls;
@@ -35,9 +35,9 @@ public final class MainActivity extends Activity implements ClientSession.Listen
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
         controls = ControlLayout.load(this);
-        session = new ClientSession(this);
         prefs = getSharedPreferences("openrpgator.settings.v1", MODE_PRIVATE);
         appStorage = new AppStorage(this);
+        session = new ClientSession(this, appStorage.pakCacheDir());
         logger = AppLogger.get(this);
         logger.info("Application started");
         localServer = new LocalServerBackend(s -> runOnUiThread(() -> status.setText(s)));
@@ -129,20 +129,18 @@ public final class MainActivity extends Activity implements ClientSession.Listen
         bar.addView(name, new LinearLayout.LayoutParams(0, dp(48), 2));
         root.addView(bar, new LinearLayout.LayoutParams(-1, dp(56)));
 
-        // ── Local server map row ──
+        // ── Local server row (auto host folder) ──
         LinearLayout localRow = new LinearLayout(this);
         localRow.setOrientation(LinearLayout.HORIZONTAL);
         localRow.setGravity(Gravity.CENTER_VERTICAL);
         localRow.setPadding(dp(8), dp(4), dp(8), dp(4));
-        EditText localMap = field("Local map (.rmap)", prefs.getString("last_local_map", ""));
-        TextView mapInfo = new TextView(this);
-        mapInfo.setTextColor(Color.rgb(160, 160, 160));
-        mapInfo.setTextSize(11);
+        TextView hostInfo = new TextView(this);
+        hostInfo.setTextColor(Color.rgb(160, 160, 160));
+        hostInfo.setTextSize(11);
         String[] maps = appStorage.mapNames();
-        mapInfo.setText("Maps: " + (maps.length == 0 ? "none saved" : String.join(", ", maps)));
-        mapInfo.setPadding(dp(8), 0, 0, 0);
-        localRow.addView(localMap, new LinearLayout.LayoutParams(0, dp(48), 2));
-        localRow.addView(mapInfo, new LinearLayout.LayoutParams(0, dp(48), 3));
+        hostInfo.setText("Host (data/host): " + (maps.length == 0 ? "no map yet" : String.join(", ", maps)));
+        hostInfo.setPadding(dp(8), 0, 0, 0);
+        localRow.addView(hostInfo, new LinearLayout.LayoutParams(-1, dp(48)));
         root.addView(localRow, new LinearLayout.LayoutParams(-1, dp(56)));
 
         // ── Action buttons row ──
@@ -219,12 +217,11 @@ public final class MainActivity extends Activity implements ClientSession.Listen
             try {
                 if (!localServer.isRunning()) {
                     int p = Integer.parseInt(port.getText().toString().trim());
-                    String mapName = localMap.getText().toString().trim();
-                    prefs.edit().putString("last_local_map", mapName).apply();
-                    Path mapPath = mapName.isEmpty() ? null : appStorage.mapFile(mapName).toPath();
-                    localServer.start(p, mapPath);
+                    int tickRate = prefs.getInt("server_tick_rate", 20);
+                    localServer.setTickRate(tickRate);
+                    localServer.start(p, appStorage.dataDir().toPath());
                     host.setText("127.0.0.1");
-                    status.setText("Local server on port " + p + ". Press Connect to join.");
+                    status.setText("Local server on port " + p + " @ " + tickRate + " Hz (data/host). Press Connect to join.");
                     local.setText("Stop server");
                 } else {
                     localServer.stop();
@@ -388,14 +385,27 @@ public final class MainActivity extends Activity implements ClientSession.Listen
         defPort.setTextColor(Color.WHITE);
         root.addView(defPort, new LinearLayout.LayoutParams(-1, dp(48)));
 
+        EditText defTick = new EditText(this);
+        defTick.setHint("Local server tick rate (Hz), default 20");
+        defTick.setText(String.valueOf(prefs.getInt("server_tick_rate", 20)));
+        defTick.setTextColor(Color.WHITE);
+        defTick.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
+        root.addView(defTick, new LinearLayout.LayoutParams(-1, dp(48)));
+
         Button saveDefaults = new Button(this);
         saveDefaults.setText("Save defaults");
         saveDefaults.setOnClickListener(v -> {
+            int tick = 20;
+            try {
+                tick = Integer.parseInt(defTick.getText().toString().trim());
+                if (tick < 1 || tick > 240) tick = 20;
+            } catch (NumberFormatException ignored) {}
             prefs.edit()
                 .putString("last_host", defHost.getText().toString().trim())
                 .putString("last_port", defPort.getText().toString().trim())
+                .putInt("server_tick_rate", tick)
                 .apply();
-            Toast.makeText(this, "Defaults saved", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "Defaults saved (tick " + tick + " Hz)", Toast.LENGTH_SHORT).show();
         });
         root.addView(saveDefaults, new LinearLayout.LayoutParams(-1, dp(48)));
 
@@ -497,18 +507,31 @@ public final class MainActivity extends Activity implements ClientSession.Listen
     @Override public void connected(Welcome w) { runOnUiThread(() -> status.setText("Connected #" + w.entityId())); }
     @Override public void snapshot(Snapshot s) { runOnUiThread(() -> game.setSnapshot(s)); }
     @Override public void status(String s) { runOnUiThread(() -> status.setText(s)); }
-    @Override public void notify(String text) {
-        runOnUiThread(() -> Toast.makeText(this, text, Toast.LENGTH_LONG).show());
+    @Override public void pakLoaded(String name) {
+        logAsset(name);
+        runOnUiThread(() -> { if (game != null) game.reloadAssets(); });
     }
-    @Override public void dialog(Dialog d) {
+    private void logAsset(String name) { logger.info("Assets: " + name + " received, atlas reloaded"); }
+    @Override public void ui(UiLayout u) {
         runOnUiThread(() -> {
-            AlertDialog.Builder b = new AlertDialog.Builder(this);
-            b.setTitle("Dialog");
-            b.setMessage(d.text());
-            b.setCancelable(false);
-            b.setItems(d.choices().toArray(new String[0]), (di, which) ->
-                    session.dialogResponse(d.dialogId(), which));
-            b.show();
+            if (UiLayout.KIND_NOTIFY.equals(u.kind())) {
+                Toast.makeText(this, u.bodyText(), Toast.LENGTH_LONG).show();
+            } else if (UiLayout.KIND_DIALOG.equals(u.kind())) {
+                AlertDialog.Builder b = new AlertDialog.Builder(this);
+                b.setTitle("Dialog");
+                List<String> choices = u.choiceTexts();
+                if (choices.isEmpty()) {
+                    b.setMessage(u.bodyText());
+                    b.setPositiveButton("OK", (di, which) ->
+                            session.dialogResponse(u.dialogId(), -1));
+                } else {
+                    b.setMessage(u.bodyText());
+                    b.setCancelable(false);
+                    b.setItems(choices.toArray(new String[0]), (di, which) ->
+                            session.dialogResponse(u.dialogId(), which));
+                }
+                b.show();
+            }
         });
     }
     @Override protected void onDestroy() { logger.info("Application stopping"); session.disconnect(); if (localServer != null) localServer.stop(); super.onDestroy(); }
@@ -517,20 +540,30 @@ public final class MainActivity extends Activity implements ClientSession.Listen
     final class GameView extends View {
         private Snapshot snapshot = new Snapshot(List.of());
         private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final android.graphics.Path diamond = new android.graphics.Path();
         private final PakAtlas atlas = new PakAtlas();
         GameView(Context c) {
             super(c);
             p.setTypeface(Typeface.create("sans", Typeface.NORMAL));
-            atlas.loadDir(appStorage.pakFiles());
+            reloadAssets();
+        }
+        void reloadAssets() {
+            try {
+                atlas.loadDir(appStorage.pakFiles());
+            } catch (Exception e) {
+                logger.error("Atlas reload failed", e);
+            }
+            invalidate();
         }
         void setSnapshot(Snapshot s) { snapshot = s; invalidate(); }
         @Override protected void onDraw(Canvas c) {
             c.drawColor(Color.rgb(36, 48, 42));
             float tile = 48, ox = getWidth() / 2f, oy = getHeight() / 3f;
-            p.setStyle(Paint.Style.FILL); p.setColor(Color.rgb(58, 78, 65));
+            p.setStyle(Paint.Style.FILL);
+            int tileCount = atlas.tileCount();
             for (int y = -8; y < 16; y++) for (int x = -12; x < 14; x++) {
                 float sx = ox + (x - y) * tile * .5f, sy = oy + (x + y) * tile * .25f;
-                c.drawRect(sx, sy, sx + tile * .5f, sy + tile * .25f, p);
+                drawTile(c, sx, sy, tile, tileCount > 0 ? (x + y) % tileCount : -1);
             }
             p.setTextSize(28); p.setColor(Color.WHITE); c.drawText("openRPGator", 20, 34, p);
             for (Snapshot.EntityState e : snapshot.entities()) {
@@ -551,6 +584,28 @@ public final class MainActivity extends Activity implements ClientSession.Listen
             if (snapshot.entities().isEmpty()) {
                 p.setColor(Color.WHITE); p.setTextSize(18);
                 c.drawText("Connect to a server", 20, 70, p);
+            }
+        }
+        /** Draws one isometric tile from the atlas texture, falling back to a flat color fill. */
+        private void drawTile(Canvas c, float sx, float sy, float tile, int id) {
+            float hw = tile * .5f, hh = tile * .25f;
+            diamond.reset();
+            diamond.moveTo(sx, sy);
+            diamond.lineTo(sx + hw, sy + hh);
+            diamond.lineTo(sx, sy + tile * .5f);
+            diamond.lineTo(sx - hw, sy + hh);
+            diamond.close();
+            Bitmap bmp = id >= 0 ? atlas.tile(id) : null;
+            if (bmp != null) {
+                int save = c.save();
+                c.clipPath(diamond);
+                Rect dst = new Rect((int) (sx - hw), (int) (sy - hh), (int) (sx + hw), (int) (sy + hh));
+                c.drawBitmap(bmp, null, dst, p);
+                c.restoreToCount(save);
+            } else {
+                int base = id < 0 ? 0 : id * 13;
+                p.setColor(Color.rgb(58 + base % 30, 78 + base % 40, 65 + base % 20));
+                c.drawPath(diamond, p);
             }
         }
     }

@@ -13,15 +13,18 @@ import java.io.*;
 import java.nio.file.*;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
-import java.util.*;
-import java.util.List;
+import java.util.Properties;
 
 /**
  * Graphical console for the dedicated server. Configures the shared data directory
- * ({@code ~/.openrpgator/data}), picks a map and asset packs, selects a port and runs the
- * server in-process so live log output is shown right next to the controls.
+ * ({@code ~/.openrpgator/data}), selects a port and runs the server in-process so live log
+ * output is shown right next to the controls.
  *
- * Settings persist to {@code ~/.openrpgator/server.properties}.
+ * <p>The server content is not configured by hand: everything is auto-discovered in the
+ * {@code host} sub-folder of the data directory (single {@code *.rmap}, {@code *.pak} packs,
+ * Lua scripts next to the map).
+ *
+ * <p>Settings persist to {@code ~/.openrpgator/server.properties}.
  */
 public final class ServerAdminFrame extends JFrame {
 
@@ -30,20 +33,17 @@ public final class ServerAdminFrame extends JFrame {
     private static final DateTimeFormatter STAMP = DateTimeFormatter.ofPattern("HH:mm:ss");
 
     private final JTextField dataDirField = new JTextField(30);
-    private final JComboBox<String> mapCombo = new JComboBox<>();
-    private final DefaultListModel<String> pakModel = new DefaultListModel<>();
-    private final JList<String> pakList = new JList<>(pakModel);
     private final JSpinner portSpinner = new JSpinner(new SpinnerNumberModel(27800, 1, 65535, 1));
+    private final JSpinner tickSpinner = new JSpinner(new SpinnerNumberModel(20, 1, 240, 1));
     private final JButton startButton = new JButton("Start server");
     private final JLabel status = new JLabel("Stopped");
     private final JTextArea log = new JTextArea();
-    private final JLabel mapInfo = new JLabel(" ");
+    private final JLabel hostInfo = new JLabel(" ");
 
     private volatile ServerHost host;
 
     public ServerAdminFrame() {
         super("openRPGator — Server admin");
-        mapCombo.setEditable(true);
         setLayout(new BorderLayout(8, 8));
         ((JPanel) getContentPane()).setBorder(new EmptyBorder(10, 10, 10, 10));
 
@@ -76,34 +76,17 @@ public final class ServerAdminFrame extends JFrame {
         refresh.addActionListener(e -> refresh());
         c.gridx = 3; p.add(refresh, c);
 
-        c.gridx = 0; c.gridy = 1; p.add(new JLabel("Map (.rmap):"), c);
-        c.gridx = 1; c.gridwidth = 1; c.weightx = 1; p.add(mapCombo, c);
-        JButton pickMap = new JButton("Pick…");
-        pickMap.addActionListener(e -> pickMap());
-        c.gridx = 2; c.weightx = 0; p.add(pickMap, c);
-        c.gridx = 3; p.add(mapInfo, c);
+        c.gridx = 0; c.gridy = 1; p.add(new JLabel("Host content:"), c);
+        c.gridx = 1; c.gridwidth = 3; p.add(hostInfo, c);
 
-        c.gridx = 0; c.gridy = 2; c.anchor = GridBagConstraints.NORTHWEST;
-        p.add(new JLabel("Packs (.pak):"), c);
+        c.gridx = 0; c.gridy = 2; p.add(new JLabel("Port:"), c);
+        c.gridx = 1; c.gridwidth = 1; p.add(portSpinner, c);
 
-        JPanel pakPane = new JPanel(new BorderLayout(4, 4));
-        pakList.setVisibleRowCount(2);
-        pakList.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
-        JScrollPane sp = new JScrollPane(pakList);
-        sp.setPreferredSize(new Dimension(200, 54));
-        pakPane.add(sp, BorderLayout.CENTER);
-        JPanel pakButtons = new JPanel(new GridLayout(2, 1, 4, 4));
-        JButton addPak = new JButton("Pick…");
-        addPak.addActionListener(e -> pickPaks());
-        pakButtons.add(addPak);
-        JButton clearPak = new JButton("Clear");
-        clearPak.addActionListener(e -> pakModel.clear());
-        pakButtons.add(clearPak);
-        pakPane.add(pakButtons, BorderLayout.EAST);
-        c.gridx = 1; c.gridy = 2; c.fill = GridBagConstraints.BOTH; c.gridwidth = 2; p.add(pakPane, c);
-
-        c.gridx = 3; c.gridy = 3; c.gridwidth = 1; p.add(new JLabel("Port:"), c);
-        c.gridx = 1; p.add(portSpinner, c);
+        c.gridx = 0; c.gridy = 3; p.add(new JLabel("Tick rate (Hz):"), c);
+        c.gridx = 1; p.add(tickSpinner, c);
+        JLabel tickHint = new JLabel("world ticks per second, default 20");
+        tickHint.setForeground(new Color(0x80, 0x80, 0x80));
+        c.gridx = 2; p.add(tickHint, c);
 
         return p;
     }
@@ -134,52 +117,18 @@ public final class ServerAdminFrame extends JFrame {
         }
     }
 
-    private void pickMap() {
-        JFileChooser fc = new JFileChooser(Path.of(dataDirField.getText(), "maps").toFile());
-        fc.setFileFilter(new javax.swing.filechooser.FileFilter() {
-            public boolean accept(File f) { return f.isDirectory() || f.getName().endsWith(".rmap"); }
-            public String getDescription() { return "RPG maps (*.rmap)"; }
-        });
-        if (fc.showOpenDialog(this) == JFileChooser.APPROVE_OPTION)
-            mapCombo.setSelectedItem(fc.getSelectedFile().getAbsolutePath());
-    }
-
-    private void pickPaks() {
-        JFileChooser fc = new JFileChooser(Path.of(dataDirField.getText(), "paks").toFile());
-        fc.setMultiSelectionEnabled(true);
-        fc.setFileFilter(new javax.swing.filechooser.FileFilter() {
-            public boolean accept(File f) { return f.isDirectory() || f.getName().endsWith(".pak"); }
-            public String getDescription() { return "Asset packs (*.pak)"; }
-        });
-        if (fc.showOpenDialog(this) == JFileChooser.APPROVE_OPTION)
-            for (File f : fc.getSelectedFiles()) pakModel.addElement(f.getAbsolutePath());
-    }
-
     private void refresh() {
         Path dataDir = Path.of(dataDirField.getText());
-        Path mapsDir = dataDir.resolve("maps"), paksDir = dataDir.resolve("paks");
-        String prevMap = mapCombo.getEditor().getItem().toString();
-        boolean hadMap = modelContains(mapCombo, (String) mapCombo.getSelectedItem());
-        mapCombo.removeAllItems();
-        for (Path p : DataDir.listIn(mapsDir, ".rmap"))
-            mapCombo.addItem(p.getFileName().toString());
-        if (mapCombo.getItemCount() == 0) mapCombo.addItem("");
-        String selected = null;
-        if (hadMap) selected = prevMap;
-        if (selected == null || !modelContains(mapCombo, selected))
-            selected = mapCombo.getItemCount() > 1 ? mapCombo.getItemAt(0) : "";
-        mapCombo.setSelectedItem(selected);
-
-        pakModel.clear();
-        for (Path p : DataDir.listIn(paksDir, ".pak"))
-            pakModel.addElement(p.getFileName().toString());
-        log("Data dir: " + dataDir);
-    }
-
-    private static boolean modelContains(JComboBox<String> box, Object sel) {
-        if (sel == null) return false;
-        for (int i = 0; i < box.getItemCount(); i++) if (box.getItemAt(i).equals(sel)) return true;
-        return false;
+        Path hostDir = dataDir.resolve("host");
+        java.util.List<Path> maps = DataDir.listIn(hostDir, ".rmap");
+        java.util.List<Path> paks = DataDir.listIn(hostDir, ".pak");
+        String map = maps.isEmpty() ? "no map" : maps.get(0).getFileName().toString();
+        if (maps.size() > 1) map += " (+" + (maps.size() - 1) + " more)";
+        hostInfo.setText("map: " + map + "   ·   packs: " + paks.size()
+                + "   ·   scripts: auto (next to map)");
+        log("Data dir: " + dataDir + "   host: " + hostDir);
+        log("Maps: " + maps.stream().map(p -> p.getFileName().toString()).toList()
+                + "   Packs: " + paks.stream().map(p -> p.getFileName().toString()).toList());
     }
 
     private void toggle() {
@@ -200,21 +149,16 @@ public final class ServerAdminFrame extends JFrame {
         try {
             dataDir = Path.of(dataDirField.getText().trim());
             if (dataDirField.getText().trim().isEmpty()) dataDir = DataDir.root();
-            Files.createDirectories(dataDir.resolve("maps"));
-            Files.createDirectories(dataDir.resolve("paks"));
+            Files.createDirectories(dataDir.resolve("host"));
         } catch (IOException | InvalidPathException e) {
             log("Bad data directory: " + e.getMessage());
             return;
         }
         dataDirField.setText(dataDir.toString());
 
-        String mapRef = mapCombo.getEditor().getItem().toString().trim();
-        List<String> pakRefs = Collections.list(pakModel.elements());
         int port = (Integer) portSpinner.getValue();
-
-        ServerHost.Config cfg = ServerConfig.resolve(dataDir,
-                new ServerConfig.Criteria(!mapRef.isEmpty(), mapRef, true, pakRefs, port),
-                this::log);
+        int tickHz = (Integer) tickSpinner.getValue();
+        ServerHost.Config cfg = ServerConfig.resolve(dataDir, port, tickHz, this::log);
 
         host = new ServerHost(this::log);
         try {
@@ -227,13 +171,13 @@ public final class ServerAdminFrame extends JFrame {
         if (cfg.map() != null && Files.isRegularFile(cfg.map())) {
             try {
                 RMap m = RMapIO.read(cfg.map());
-                mapInfo.setText(m.name() + " " + m.width() + "×" + m.height()
+                hostInfo.setText(m.name() + " " + m.width() + "×" + m.height()
                         + " · " + m.entities().size() + " entities · " + m.layers().size() + " layer(s)");
             } catch (Exception e) {
-                mapInfo.setText("map read error");
+                hostInfo.setText("map read error");
             }
         } else {
-            mapInfo.setText("no map loaded");
+            hostInfo.setText("no map loaded");
         }
         status.setText("Running on :" + port);
         status.setForeground(new Color(0x1b, 0x8a, 0x22));
@@ -255,26 +199,17 @@ public final class ServerAdminFrame extends JFrame {
         dataDirField.setText(p.getProperty("data", DataDir.root().toString()));
         String port = p.getProperty("port");
         try { if (port != null) portSpinner.setValue(Integer.parseInt(port)); } catch (NumberFormatException ignored) {}
-        String map = p.getProperty("map");
-        if (map != null && !map.isBlank()) mapCombo.setSelectedItem(map);
-        String paks = p.getProperty("paks");
-        if (paks != null && !paks.isBlank())
-            for (String s : paks.split(",")) if (!s.isBlank()) pakModel.addElement(s.trim());
+        String tickHz = p.getProperty("tick");
+        try { if (tickHz != null) tickSpinner.setValue(Integer.parseInt(tickHz)); } catch (NumberFormatException ignored) {}
     }
 
     private void saveConfig() {
         try {
-            Files.createDirectories(CONFIG_FILE.getParent());
             Properties p = new Properties();
             p.setProperty("data", dataDirField.getText().trim());
             p.setProperty("port", String.valueOf(portSpinner.getValue()));
-            Object m = mapCombo.getEditor().getItem();
-            if (m != null && !m.toString().isBlank()) p.setProperty("map", m.toString());
-            Collection<String> pa = Collections.list(pakModel.elements());
-            if (!pa.isEmpty()) p.setProperty("paks", String.join(",", pa));
-            try (OutputStream out = Files.newOutputStream(CONFIG_FILE)) {
-                p.store(out, "openRPGator server admin config");
-            }
+            p.setProperty("tick", String.valueOf(tickSpinner.getValue()));
+            try (OutputStream out = Files.newOutputStream(CONFIG_FILE)) { p.store(out, "openRPGator server admin"); }
         } catch (IOException ignored) {}
     }
 }

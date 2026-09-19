@@ -37,15 +37,26 @@ public final class PakTool {
         Path out = null;
         int maxSize = 64; // default: reject suspiciously large rasters (64 MiB)
         int resizeW = 0, resizeH = 0;
+        Map<String, int[]> namespaceResize = new HashMap<>();
         for (int i = 1; i < args.length; i++) {
             switch (args[i]) {
                 case "--root" -> root = Path.of(args[++i]);
                 case "--out" -> out = Path.of(args[++i]);
                 case "--max-miB" -> maxSize = Integer.parseInt(args[++i]);
                 case "--resize" -> {
-                    String[] wh = args[++i].split("[xX]", 2);
-                    resizeW = Integer.parseInt(wh[0]);
-                    resizeH = Integer.parseInt(wh[1]);
+                    String arg = args[++i];
+                    int eq = arg.indexOf('=');
+                    if (eq > 0) {
+                        // per-namespace resize, e.g. --resize sprite=32x64 --resize tile=32x16
+                        String[] wh = arg.substring(eq + 1).split("[xX]", 2);
+                        namespaceResize.put(arg.substring(0, eq),
+                                new int[]{Integer.parseInt(wh[0]), Integer.parseInt(wh[1])});
+                    } else {
+                        // plain resize applies to every namespace (legacy behaviour)
+                        String[] wh = arg.split("[xX]", 2);
+                        resizeW = Integer.parseInt(wh[0]);
+                        resizeH = Integer.parseInt(wh[1]);
+                    }
                 }
                 default -> { usage(); return; }
             }
@@ -62,7 +73,10 @@ public final class PakTool {
                     System.err.println("skip (not in tile/sprite/ui/): " + p);
                     continue;
                 }
-                PakImage img = decode(p, resizeW, resizeH);
+                int[] ns = namespaceResize.get(key.substring(0, key.indexOf('/')));
+                int rw = ns != null ? ns[0] : resizeW;
+                int rh = ns != null ? ns[1] : resizeH;
+                PakImage img = decode(p, rw, rh);
                 if (img.bytes() > (long) maxSize * 1024 * 1024)
                     throw new IOException("raster too large: " + p + " (" + img.bytes() + " bytes)");
                 named.put(key, img);
@@ -119,9 +133,10 @@ public final class PakTool {
     private static void usage() {
         System.out.println("""
                 PakTool — .pak asset packer
-                  pack --root <dir> --out <file.pak> [--resize WxH] [--max-miB N]
+                  pack --root <dir> --out <file.pak> [--resize WxH] [--resize tile=WxH] [--max-miB N]
                   list <file.pak>
                   info <file.pak>
-                Root layout: tile/*.png, sprite/*.png, ui/*.png (names become the asset keys).""");
+                Root layout: tile/*.png, sprite/*.png, ui/*.png (names become the asset keys).
+                --resize WxH applies to every namespace; --resize <ns>=WxH only to that one.""");
     }
 }

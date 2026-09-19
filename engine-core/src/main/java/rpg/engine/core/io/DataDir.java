@@ -11,13 +11,14 @@ import java.util.List;
  *
  * <pre>
  *   ~/.openrpgator/data/
- *       maps/   *.rmap
- *       paks/   *.pak
+ *       host/   *.rmap   *.lua   *.pak
  * </pre>
  *
- * Maps and asset packs dropped into this directory are picked up by the server, streamed to
- * clients and offered in the editors without needing full absolute paths. Android uses its own
- * equivalent layout under the app storage root (see {@code AppStorage}).
+ * All server files live in the single {@code host} folder: the map the server auto-discovers,
+ * the Lua scripts it pulls in (resolved next to the map) and the asset packs it streams to
+ * clients. Maps and packs dropped into it are picked up automatically; there is no manual map
+ * selection anymore. Android uses its own equivalent layout under the app storage root (see
+ * {@code AppStorage}).
  */
 public final class DataDir {
     private DataDir() {}
@@ -26,29 +27,72 @@ public final class DataDir {
         return Path.of(System.getProperty("user.home"), ".openrpgator", "data");
     }
 
-    public static Path maps() { return root().resolve("maps"); }
-    public static Path paks() { return root().resolve("paks"); }
+    /** The single folder holding all server files: maps, scripts and asset packs. */
+    public static Path host() { return root().resolve("host"); }
 
-    /** Creates the {maps,paks} subdirectories; safe to call repeatedly. */
+    /** Creates the host folder; safe to call repeatedly. */
     public static void ensure() throws IOException {
-        Files.createDirectories(maps());
-        Files.createDirectories(paks());
+        Files.createDirectories(host());
+        migrateLegacy();
     }
 
-    /** Sorted {@code *.rmap} paths from the shared maps directory. */
-    public static List<Path> mapFiles() { return listIn(maps(), ".rmap"); }
+    /**
+     * One-time migration for installs that still use the pre-0.4 layout
+     * ({@code data/maps}, {@code data/paks}): their files are moved into {@code host}
+     * so existing content keeps working without a manual move.
+     */
+    private static void migrateLegacy() throws IOException {
+        if (Files.isDirectory(host()) && hostContainsData()) return;
+        Path maps = root().resolve("maps");
+        Path paks = root().resolve("paks");
+        if (Files.isDirectory(maps)) moveContent(maps, host());
+        if (Files.isDirectory(paks)) moveContent(paks, host());
+    }
 
-    /** Sorted {@code *.pak} paths from the shared paks directory. */
-    public static List<Path> pakFiles() { return listIn(paks(), ".pak"); }
+    private static boolean hostContainsData() {
+        try (DirectoryStream<Path> ds = Files.newDirectoryStream(host())) {
+            return ds.iterator().hasNext();
+        } catch (IOException e) {
+            return false;
+        }
+    }
+
+    private static void moveContent(Path from, Path to) throws IOException {
+        try (DirectoryStream<Path> ds = Files.newDirectoryStream(from)) {
+            for (Path p : ds) {
+                Path target = to.resolve(p.getFileName().toString());
+                if (!Files.exists(target)) {
+                    try {
+                        Files.move(p, target);
+                    } catch (IOException ignored) {
+                        // a file may be locked or in use; leave it where it is
+                    }
+                }
+            }
+        }
+    }
+
+    /** Sorted {@code *.rmap} paths from the host folder. */
+    public static List<Path> hostMaps() { return listIn(host(), ".rmap"); }
+
+    /** Sorted {@code *.pak} paths from the host folder. */
+    public static List<Path> hostPaks() { return listIn(host(), ".pak"); }
 
     /**
-     * Resolves a bare map name against the shared maps directory. Absolute paths and paths
-     * that already exist relative to the working directory are returned as-is.
+     * The single automatically-selected host map. With zero or multiple maps a warning is
+     * delivered (via {@code warn}, may be null) and {@code null} is returned for zero.
      */
-    public static Path resolveMap(String ref) { return resolveIn(maps(), ref); }
-
-    /** Same as {@link #resolveMap(String)} but against the shared paks directory. */
-    public static Path resolvePak(String ref) { return resolveIn(paks(), ref); }
+    public static Path autoMap(java.util.function.Consumer<String> warn) {
+        List<Path> maps = hostMaps();
+        if (maps.size() == 1) return maps.get(0);
+        java.util.function.Consumer<String> w = warn == null ? s -> {} : warn;
+        if (maps.isEmpty()) {
+            w.accept("No map in " + host() + " — server starts without a map");
+            return null;
+        }
+        w.accept("Multiple maps in " + host() + "; using " + maps.get(0).getFileName());
+        return maps.get(0);
+    }
 
     public static Path resolveIn(Path dir, String ref) {
         if (ref == null || ref.isBlank()) return null;
@@ -65,6 +109,7 @@ public final class DataDir {
         String suffix = ext == null ? "" : ext.toLowerCase(java.util.Locale.ROOT);
         try (DirectoryStream<Path> ds = Files.newDirectoryStream(dir)) {
             for (Path p : ds) {
+                if (Files.isDirectory(p)) continue;
                 String name = p.getFileName().toString().toLowerCase(java.util.Locale.ROOT);
                 if (suffix.isEmpty() || name.endsWith(suffix)) out.add(p);
             }
