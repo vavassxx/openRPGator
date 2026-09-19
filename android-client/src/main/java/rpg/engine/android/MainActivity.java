@@ -729,20 +729,20 @@ public final class MainActivity extends Activity implements ClientSession.Listen
             int tileCount = atlas.tileCount();
             for (int y = -8; y < 16; y++) for (int x = -12; x < 14; x++) {
                 float sx = ox + (x - y) * tile * .5f, sy = oy + (x + y) * tile * .25f;
-                drawTile(c, sx, sy, tile, tileCount > 0 ? (x + y) % tileCount : -1);
+                drawTile(c, sx, sy, tile, floorTileId(x, y, tileCount));
             }
             for (Snapshot.EntityState e : snapshot.entities()) {
                 float sx = ox + (float)(e.x() - e.y()) * tile * .5f;
-                float sy = oy + (float)(e.x() + e.y()) * tile * .25f - (float)e.elevation() * 12;
+                float sy = oy + (float)(e.x() + e.y()) * tile * .25f - (float)e.elevation() * 12 * zoom;
                 Bitmap bmp = atlas.spriteImage(e.sprite());
                 if (bmp != null) {
-                    float s = 40 * (float) e.scale();
+                    float s = 40 * zoom * (float) e.scale();
                     float sc = Math.min(s / bmp.getWidth(), s / bmp.getHeight());
                     int w = (int) (bmp.getWidth() * sc), h = (int) (bmp.getHeight() * sc);
                     Rect dst = new Rect((int) (sx - w / 2f), (int) (sy - h / 2f), (int) (sx + w / 2f), (int) (sy + h / 2f));
                     c.drawBitmap(bmp, null, dst, p);
                 } else {
-                    p.setColor(Color.rgb(230, 180, 80)); c.drawCircle(sx, sy, 18, p);
+                    p.setColor(Color.rgb(230, 180, 80)); c.drawCircle(sx, sy, 18 * zoom, p);
                 }
                 p.setColor(Color.BLACK); p.setTextSize(11); c.drawText(Long.toString(e.id()), sx - 7, sy + 4, p);
             }
@@ -760,16 +760,24 @@ public final class MainActivity extends Activity implements ClientSession.Listen
             diamond.close();
             Bitmap bmp = id >= 0 ? atlas.tile(id) : null;
             if (bmp != null) {
-                int save = c.save();
-                c.clipPath(diamond);
+                // Pak tiles are already diamond-shaped (transparent corners) — draw the bounding
+                // box directly. clipPath() with a non-rect path is unsupported on the hardware
+                // canvas and only produced garbage.
                 Rect dst = new Rect((int) (sx - hw), (int) (sy - hh), (int) (sx + hw), (int) (sy + hh));
                 c.drawBitmap(bmp, null, dst, p);
-                c.restoreToCount(save);
             } else {
-                int base = id < 0 ? 0 : id * 13;
-                p.setColor(Color.rgb(58 + base % 30, 78 + base % 40, 65 + base % 20));
+                p.setColor(Color.rgb(58, 78, 65));
                 c.drawPath(diamond, p);
             }
+        }
+        /** Coherent procedural floor: mostly grass with sparse dirt/light patches (stable per cell). */
+        private int floorTileId(int x, int y, int tileCount) {
+            if (tileCount <= 0) return -1;
+            int h = Math.abs(x * 31 + y * 17) % 103;
+            if (h == 0 && tileCount > 1) return 1;
+            if (h == 7 && tileCount > 7) return 7;
+            if (h == 19 && tileCount > 8) return 8;
+            return 0;
         }
 
         /** Blind renderer for the host-driven widget schema (UiLayout kind "layout"). */

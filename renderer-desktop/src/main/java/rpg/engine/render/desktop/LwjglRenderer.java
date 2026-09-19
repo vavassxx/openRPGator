@@ -367,6 +367,40 @@ public final class LwjglRenderer implements Renderer {
         return false;
     }
 
+    /** Consumes and returns the first key pressed this frame (edge), or -1 — for "press a key" rebinding. */
+    public int consumeKey() {
+        for (int i = 0; i <= GLFW_KEY_LAST; i++) {
+            if (keyEdge[i]) {
+                keyEdge[i] = false;
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private static final Map<Integer, String> KEY_NAMES = buildKeyNames();
+    private static Map<Integer, String> buildKeyNames() {
+        Map<Integer, String> m = new HashMap<>();
+        for (int c = 0; c < 26; c++) m.put(GLFW_KEY_A + c, String.valueOf((char) ('A' + c)));
+        for (int c = 0; c < 10; c++) m.put(GLFW_KEY_0 + c, String.valueOf((char) ('0' + c)));
+        m.put(GLFW_KEY_UP, "UP"); m.put(GLFW_KEY_DOWN, "DOWN");
+        m.put(GLFW_KEY_LEFT, "LEFT"); m.put(GLFW_KEY_RIGHT, "RIGHT");
+        m.put(GLFW_KEY_SPACE, "Space"); m.put(GLFW_KEY_ENTER, "Enter"); m.put(GLFW_KEY_TAB, "Tab");
+        m.put(GLFW_KEY_ESCAPE, "Esc"); m.put(GLFW_KEY_BACKSPACE, "Backspace"); m.put(GLFW_KEY_DELETE, "Delete");
+        m.put(GLFW_KEY_LEFT_SHIFT, "LShift"); m.put(GLFW_KEY_RIGHT_SHIFT, "RShift");
+        m.put(GLFW_KEY_LEFT_CONTROL, "LCtrl"); m.put(GLFW_KEY_RIGHT_CONTROL, "RCtrl");
+        m.put(GLFW_KEY_LEFT_ALT, "LAlt"); m.put(GLFW_KEY_RIGHT_ALT, "RAlt");
+        m.put(GLFW_KEY_EQUAL, "+"); m.put(GLFW_KEY_MINUS, "-");
+        m.put(GLFW_KEY_KP_ADD, "KP+"); m.put(GLFW_KEY_KP_SUBTRACT, "KP-");
+        m.put(GLFW_KEY_PERIOD, "."); m.put(GLFW_KEY_COMMA, ",");
+        m.put(GLFW_KEY_SLASH, "/"); m.put(GLFW_KEY_SEMICOLON, ";");
+        for (int f = 0; f < 12; f++) m.put(GLFW_KEY_F1 + f, "F" + (f + 1));
+        return m;
+    }
+
+    /** Human-readable name for a GLFW key code ("W", "UP", ...). */
+    public String keyName(int glfwKey) { return KEY_NAMES.getOrDefault(glfwKey, "Key " + glfwKey); }
+
     public boolean mouseDown(int button) {
         return button >= 0 && button <= GLFW_MOUSE_BUTTON_LAST && mouseBtn[button];
     }

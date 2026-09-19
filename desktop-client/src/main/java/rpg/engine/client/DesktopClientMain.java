@@ -42,8 +42,34 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
     private static final Path CONFIG_DIR = Path.of(System.getProperty("user.home"), ".openrpgator");
     private static final Path CONFIG_FILE = CONFIG_DIR.resolve("client.properties");
 
-    enum Screen { MENU, SETTINGS, LOADING, GAME }
+    enum Screen { MENU, SETTINGS, CONTROLS, LOADING, GAME }
     private volatile Screen screen = Screen.MENU;
+
+    /** Rebinds the same handful of GLFW keys — the ONLY hard-coded game actions. */
+    enum Action {
+        MOVE_UP("Move up", LwjglRenderer.KEY_W),
+        MOVE_DOWN("Move down", LwjglRenderer.KEY_S),
+        MOVE_LEFT("Move left", LwjglRenderer.KEY_A),
+        MOVE_RIGHT("Move right", LwjglRenderer.KEY_D),
+        PRIMARY("Primary", LwjglRenderer.KEY_J),
+        SECONDARY("Secondary", LwjglRenderer.KEY_K),
+        INTERACT("Interact", LwjglRenderer.KEY_L),
+        INVENTORY("Inventory", LwjglRenderer.KEY_I);
+        final String label;
+        final int dflt;
+        Action(String label, int dflt) { this.label = label; this.dflt = dflt; }
+    }
+    private final Map<Action, Integer> binds = new EnumMap<>(Action.class);
+    { for (Action a : Action.values()) binds.put(a, a.dflt); } // defaults, overridden by config
+    private int rebindRow = -1; // Action.values() index while waiting for a key press
+
+    private void resetControls() {
+        for (Action a : Action.values()) binds.put(a, a.dflt);
+        rebindRow = -1;
+        addToast("Controls reset to defaults");
+        saveConfig();
+    }
+    private int bind(Action a) { return binds.getOrDefault(a, 0); }
 
     private static final int FIELD_CAPACITY = 512;
 
@@ -129,6 +155,7 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
             switch (screen) {
                 case MENU -> renderMenu(w, h);
                 case SETTINGS -> renderSettings(w, h);
+                case CONTROLS -> renderControls(w, h);
                 case LOADING -> renderLoading(w, h);
                 case GAME -> renderGame(w, h);
             }
@@ -184,6 +211,12 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
         try { if (savedTick != null) localTickRate = Integer.parseInt(savedTick); } catch (NumberFormatException ignored) {}
         String savedConnect = cfg.getProperty("connect");
         if (savedConnect != null && connectHost.equals(DEFAULT_HOST)) connectTo(savedConnect);
+        for (Action a : Action.values()) {
+            String saved = cfg.getProperty("bind." + a.name());
+            if (saved != null) {
+                try { binds.put(a, Integer.parseInt(saved)); } catch (NumberFormatException ignored) {}
+            }
+        }
     }
 
     private void saveConfig() {
@@ -193,6 +226,7 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
             cfg.setProperty("name", playerName);
             cfg.setProperty("localTick", String.valueOf(localTickRate));
             cfg.setProperty("connect", connectHost + ":" + connectPort);
+            for (Action a : Action.values()) cfg.setProperty("bind." + a.name(), String.valueOf(bind(a)));
             try (OutputStream out = Files.newOutputStream(CONFIG_FILE)) { cfg.store(out, "openRPGator client config"); }
         } catch (IOException ignored) {}
     }
@@ -223,7 +257,9 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
             connectRemote();
         if (button(cx - bw/2, startY + gap * 2, bw, bh, "Settings"))
             openSettings();
-        if (button(cx - bw/2, startY + gap * 3, bw, bh, "Quit"))
+        if (button(cx - bw/2, startY + gap * 3, bw, bh, "Controls"))
+            { rebindRow = -1; screen = Screen.CONTROLS; }
+        if (button(cx - bw/2, startY + gap * 4, bw, bh, "Quit"))
             renderer.close();
 
         renderer.text(8, h - 16, statusText, 1, 0.4f, 0.7f, 0.4f);
@@ -370,6 +406,70 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
     }
 
     // ══════════════════════════════════════════════════════════════
+    //  CONTROLS SCREEN (view + rebind action keys)
+    // ══════════════════════════════════════════════════════════════
+    private void renderControls(int w, int h) {
+        renderer.begin(w, h);
+
+        double cx = w / 2.0, top = 80;
+        renderer.text(cx - renderer.textWidth("Controls", 3) / 2, top, "Controls", 3, 0.9f, 0.8f, 0.3f);
+        String hint = "Click a row, then press a key to rebind. Arrows always move too. Esc closes this screen.";
+        renderer.text(cx - renderer.textWidth(hint, 1) / 2, top + 40, hint, 1, 0.6f, 0.6f, 0.65f);
+
+        Action[] actions = Action.values();
+        double fw = 560, fh = 34, fX = cx - fw / 2, fY = top + 76, gap = 47;
+        for (int i = 0; i < actions.length; i++) {
+            double y = fY + i * gap;
+            boolean active = i == rebindRow;
+            if (active)
+                renderer.rect(fX, y, fw, fh, 0.2f, 0.35f, 0.25f, 0.95f);
+            else
+                renderer.rect(fX, y, fw, fh, 0.1f, 0.12f, 0.16f, 0.95f);
+            renderer.rect(fX, y, fw, 2, 0.4f, 0.6f, 0.4f, 1f);
+            renderer.text(fX + 12, y + (fh - 8) / 2, actions[i].label, 1, 0.9f, 0.9f, 0.95f);
+            String keyTxt = active ? "press a key..." : renderer.keyName(bind(actions[i]));
+            double tw = renderer.textWidth(keyTxt, 1);
+            renderer.text(fX + fw - tw - 12, y + (fh - 8) / 2, keyTxt, 1,
+                    active ? 0.95f : 0.6f, active ? 0.75f : 0.8f, active ? 0.4f : 0.55f);
+            if (!active && renderer.mouseClicked(0)
+                    && renderer.mouseX() >= fX && renderer.mouseX() <= fX + fw
+                    && renderer.mouseY() >= y && renderer.mouseY() <= y + fh) {
+                rebindRow = i;
+            }
+        }
+
+        // ── Rebind: consume any key pressed this frame ────────────
+        if (rebindRow >= 0) {
+            int k = renderer.consumeKey();
+            if (k == LwjglRenderer.KEY_ESCAPE) {
+                rebindRow = -1;                       // Esc cancels the rebind, stays on screen
+            } else if (k != -1) {
+                Action a = actions[rebindRow];
+                boolean conflict = false;
+                for (Action o : Action.values()) if (o != a && bind(o) == k) conflict = true;
+                if (conflict) {
+                    addToast("Key already assigned");
+                } else {
+                    binds.put(a, k);
+                    addToast(a.label + " → " + renderer.keyName(k));
+                    saveConfig();
+                }
+                rebindRow = -1;
+            }
+        }
+
+        // ── Actions ───────────────────────────────────────────────
+        double bw = 180, bh = 36, by = fY + actions.length * gap + 24;
+        if (button(cx - bw * 1.1 - 6, by, bw, bh, "Reset to defaults")) resetControls();
+        if (button(cx + 6, by, bw, bh, "Back")) { rebindRow = -1; screen = Screen.MENU; return; }
+        if (renderer.keyPressed(LwjglRenderer.KEY_ESCAPE)) { rebindRow = -1; screen = Screen.MENU; return; }
+
+        String hp = "Esc while rebinding = keep the old bind";
+        renderer.text(cx - renderer.textWidth(hp, 1) / 2, by + bh + 20, hp, 1, 0.4f, 0.4f, 0.45f);
+        renderer.text(8, h - 16, statusText, 1, 0.4f, 0.7f, 0.4f);
+    }
+
+    // ══════════════════════════════════════════════════════════════
     //  LOADING SCREEN (handshake + pak download progress)
     // ══════════════════════════════════════════════════════════════
     private void renderLoading(int w, int h) {
@@ -414,17 +514,17 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
         // isometric projection (screen right = world (+1,-1), screen down = world (+1,+1)).
         double sx = 0, sy = 0;
         int actions = 0;
-        if (renderer.keyDown(LwjglRenderer.KEY_D) || renderer.keyDown(LwjglRenderer.KEY_RIGHT)) sx += 1;
-        if (renderer.keyDown(LwjglRenderer.KEY_A) || renderer.keyDown(LwjglRenderer.KEY_LEFT)) sx -= 1;
-        if (renderer.keyDown(LwjglRenderer.KEY_S) || renderer.keyDown(LwjglRenderer.KEY_DOWN)) sy += 1;
-        if (renderer.keyDown(LwjglRenderer.KEY_W) || renderer.keyDown(LwjglRenderer.KEY_UP)) sy -= 1;
+        if (renderer.keyDown(bind(Action.MOVE_RIGHT)) || renderer.keyDown(LwjglRenderer.KEY_RIGHT)) sx += 1;
+        if (renderer.keyDown(bind(Action.MOVE_LEFT)) || renderer.keyDown(LwjglRenderer.KEY_LEFT)) sx -= 1;
+        if (renderer.keyDown(bind(Action.MOVE_DOWN)) || renderer.keyDown(LwjglRenderer.KEY_DOWN)) sy += 1;
+        if (renderer.keyDown(bind(Action.MOVE_UP)) || renderer.keyDown(LwjglRenderer.KEY_UP)) sy -= 1;
         double dx = sx + sy, dy = sy - sx;
         double len = Math.sqrt(dx * dx + dy * dy);
         if (len > 1.0) { dx /= len; dy /= len; }
-        if (renderer.keyDown(LwjglRenderer.KEY_J)) actions |= Input.PRIMARY;
-        if (renderer.keyDown(LwjglRenderer.KEY_K)) actions |= Input.SECONDARY;
-        if (renderer.keyDown(LwjglRenderer.KEY_L)) actions |= Input.INTERACT;
-        if (renderer.keyDown(LwjglRenderer.KEY_I)) actions |= Input.INVENTORY;
+        if (renderer.keyDown(bind(Action.PRIMARY))) actions |= Input.PRIMARY;
+        if (renderer.keyDown(bind(Action.SECONDARY))) actions |= Input.SECONDARY;
+        if (renderer.keyDown(bind(Action.INTERACT))) actions |= Input.INTERACT;
+        if (renderer.keyDown(bind(Action.INVENTORY))) actions |= Input.INVENTORY;
         if (dx != 0 || dy != 0 || actions != 0) session.input(dx, dy, actions);
 
         // ESC → back to menu
