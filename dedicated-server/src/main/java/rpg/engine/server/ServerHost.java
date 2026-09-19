@@ -5,7 +5,6 @@ import rpg.engine.core.component.*;
 import rpg.engine.core.ecs.EntityId;
 import rpg.engine.core.math.WorldPosition;
 import rpg.engine.network.*;
-import rpg.engine.pak.PakAssets;
 import rpg.engine.pak.PakStreamer;
 import rpg.engine.world.InteractRequestedEvent;
 import rpg.engine.script.UiSink;
@@ -59,8 +58,15 @@ public final class ServerHost {
     private volatile boolean running;
     private ServerSocket server;
     private ScheduledExecutorService tick;
-    private Map<String, Integer> sprites = Map.of();
+    private static final String PLAYER_SPRITE = rpg.engine.runtime.Sprites.PLAYER;
     private volatile List<Path> pakFiles = List.of();
+    /**
+     * Serializes all access to {@link GameRuntime} (world mutate + snapshot broadcast). The ECS
+     * is not thread-safe: world mutations come from the tick thread ({@code runtime.tick()},
+     * Lua on_tick) and from per-client network threads ({@link #applyInput}, spawn/destroy,
+     * dialog responses), while {@link #broadcastSnapshot} reads the whole world every tick.
+     */
+    private final Object worldLock = new Object();
 
     public ServerHost(Listener listener) {
         this.listener = listener == null ? line -> {} : listener;
@@ -74,7 +80,6 @@ public final class ServerHost {
         if (running) return;
         runtime = new GameRuntime();
         runtime.setUiSink(uiSink());
-        sprites = Map.of();
         pakFiles = List.copyOf(cfg.paks());
 
         if (cfg.map() != null && Files.isRegularFile(cfg.map())) {
@@ -87,9 +92,6 @@ public final class ServerHost {
         } else if (cfg.map() != null) {
             listener.error("Map file not found: " + cfg.map());
         }
-        sprites = spriteKeys(cfg.paks());
-        if (sprites.isEmpty() && runtime.map() != null) sprites = Sprites.byPrefab(runtime.map());
-        else if (runtime.map() != null) sprites = Sprites.byPrefabInPak(runtime.map(), sprites);
         if (!pakFiles.isEmpty()) {
             listener.log("Will stream " + pakFiles.size() + " pak(s): "
                     + pakFiles.stream().map(p -> p.getFileName().toString()).toList());
@@ -98,7 +100,15 @@ public final class ServerHost {
         long tickMs = Math.max(1, Math.round(1000.0 / cfg.tickHz()));
         tick = Executors.newSingleThreadScheduledExecutor();
         tick.scheduleAtFixedRate(() -> {
-            try { runtime.tick(); } catch (Throwable t) { t.printStackTrace(); }
+            try {
+                synchronized (worldLock) {
+                    runtime.tick();
+                    // Entities move on their own (rat patrol, sky timer, Lua on_tick), not only
+                    // in response to player input — broadcast the world every tick so clients
+                    // see autonomous motion without the player having to move.
+                    broadcastSnapshot();
+                }
+            } catch (Throwable t) { t.printStackTrace(); }
         }, 0, tickMs, TimeUnit.MILLISECONDS);
         listener.log("World tick @ " + cfg.tickHz() + " Hz (" + tickMs + " ms)");
 
@@ -143,17 +153,19 @@ public final class ServerHost {
 
             Long entityId = spawnPlayer(h.name());
             client = new Client(entityId, s, out);
-            clients.put(entityId, client);
             if (!pakFiles.isEmpty()) PakStreamer.send(out, pakFiles);
             Protocol.write(out, new Welcome(entityId));
+            // Register only after Welcome: the tick thread broadcasts snapshots to every client,
+            // so a client must not be reachable before its handshake has completed.
+            clients.put(entityId, client);
 
             while (running && !s.isClosed()) {
                 Packet q = Protocol.read(in);
                 if (q instanceof Input x) {
                     applyInput(entityId, x);
                 } else if (q instanceof DialogResponse r) {
-                    // Deliver on the next tick thread to stay thread-safe with Lua.
-                    runtime.respondDialog(r.dialogId(), r.choice());
+                    // Deliver under the world lock: Lua dialogs must not race the tick thread.
+                    synchronized (worldLock) { runtime.respondDialog(r.dialogId(), r.choice()); }
                 }
             }
         } catch (Exception ignored) {
@@ -167,27 +179,21 @@ public final class ServerHost {
     }
 
     private Long spawnPlayer(String name) {
-        Long id = runtime.world().spawn().value();
-        runtime.world().entities().set(new EntityId(id), new Name(name));
-        runtime.world().entities().set(new EntityId(id),
-                new Transform(new WorldPosition(0, 0, 0), 0));
-        return id;
-    }
-
-    /** Sprite index map derived from the pak order the clients will load (see PakAssets). */
-    private Map<String, Integer> spriteKeys(List<Path> paks) {
-        try {
-            return PakAssets.spriteKeyIndex(paks.toArray(Path[]::new));
-        } catch (IOException e) {
-            return Map.of();
+        synchronized (worldLock) {
+            Long id = runtime.world().spawn().value();
+            runtime.world().entities().set(new EntityId(id), new Name(name));
+            runtime.world().entities().set(new EntityId(id),
+                    new Transform(new WorldPosition(0, 0, 0), 0));
+            return id;
         }
     }
 
     private void destroyPlayer(Long id) {
-        runtime.world().entities().destroy(new EntityId(id));
+        synchronized (worldLock) { runtime.world().entities().destroy(new EntityId(id)); }
     }
 
     private void applyInput(Long entityId, Input x) {
+        synchronized (worldLock) {
         var e = new EntityId(entityId);
         var t = runtime.world().entities().get(e, Transform.class).orElseThrow();
         var desired = new WorldPosition(t.position().x() + x.dx() * 0.1,
@@ -198,6 +204,7 @@ public final class ServerHost {
             runtime.world().interactTarget(moved, 2.0).ifPresent(target ->
                     runtime.world().events().emit(new InteractRequestedEvent(e, target)));
         broadcastSnapshot();
+        }
     }
 
     private void broadcastSnapshot() {
@@ -206,11 +213,12 @@ public final class ServerHost {
                     var reg = runtime.world().entities();
                     var t = reg.get(id, Transform.class).orElse(null);
                     if (t == null) return null;
-                    String prefab = reg.get(id, Prefab.class).map(Prefab::value)
-                            .orElseGet(() -> reg.get(id, Name.class).map(Name::value).orElse(null));
-                    int resource = Sprites.resourceOf(sprites, prefab);
+                    String prefab = reg.get(id, Prefab.class).map(Prefab::value).orElse(null);
+                    // Players carry a Name but no Prefab -> always the dedicated player sprite.
+                    String sprite = (prefab == null || prefab.isBlank()) ? PLAYER_SPRITE : prefab;
+                    double scale = reg.get(id, Scale.class).map(Scale::value).orElse(1.0);
                     return new Snapshot.EntityState(id.value(), t.position().x(),
-                            t.position().y(), t.position().elevation(), resource);
+                            t.position().y(), t.position().elevation(), sprite, scale);
                 })
                 .filter(Objects::nonNull)
                 .toList();

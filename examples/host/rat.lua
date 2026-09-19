@@ -1,6 +1,8 @@
 -- Крыса (9,14). Патрулирует квадратик вокруг своей точки каждые 10 тиков.
 -- Второй способ "движения": сущность сама переставляет себя через me.set_position в on_tick.
+-- Размер тоже можно менять из скрипта: set_scale умножает размер спрайта (0.75 = мельче игрока).
 entity.set_trigger(1.5)
+entity.set_scale(0.75)
 local hx, hy = entity.position().x, entity.position().y
 
 entity.on_tick(function(me)

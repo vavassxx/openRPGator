@@ -61,6 +61,7 @@ public final class EditorFrame extends JFrame {
     private final JTextField xField = new JTextField();
     private final JTextField yField = new JTextField();
     private final JTextField zField = new JTextField("0");
+    private final JTextField scaleField = new JTextField("1.0");
     private final JTextField scriptField = new JTextField();
     private final ScriptPane scriptPane = new ScriptPane();
     private final JTabbedPane rightTabs = new JTabbedPane();
@@ -161,7 +162,7 @@ public final class EditorFrame extends JFrame {
         if (selectedEntity == null || selectedEntity < 0 || selectedEntity >= map.entities().size()) return;
         List<MapEntity> es = new ArrayList<>(map.entities());
         MapEntity e = es.get(selectedEntity);
-        es.set(selectedEntity, new MapEntity(e.id(), e.prefab(), new WorldPosition(x, y, e.position().elevation()), e.script()));
+        es.set(selectedEntity, new MapEntity(e.id(), e.prefab(), new WorldPosition(x, y, e.position().elevation()), e.script(), e.scale()));
         map = new RMap(map.name(), map.tileSize(), map.width(), map.height(), map.layers(), es);
         canvas.repaint();
     }
@@ -179,9 +180,10 @@ public final class EditorFrame extends JFrame {
         xField.setEnabled(has);
         yField.setEnabled(has);
         zField.setEnabled(has);
+        scaleField.setEnabled(has);
         scriptField.setEnabled(has);
         if (!has) {
-            idField.setText(""); prefabCombo.setSelectedItem(""); xField.setText(""); yField.setText(""); zField.setText("0"); scriptField.setText("");
+            idField.setText(""); prefabCombo.setSelectedItem(""); xField.setText(""); yField.setText(""); zField.setText("0"); scaleField.setText("1.0"); scriptField.setText("");
             return;
         }
         MapEntity e = map.entities().get(index);
@@ -190,6 +192,7 @@ public final class EditorFrame extends JFrame {
         xField.setText(String.valueOf(e.position().x()));
         yField.setText(String.valueOf(e.position().y()));
         zField.setText(String.valueOf(e.position().elevation()));
+        scaleField.setText(String.valueOf(e.scale()));
         scriptField.setText(e.script() == null ? "" : e.script());
     }
 
@@ -435,6 +438,8 @@ public final class EditorFrame extends JFrame {
         form.add(xyz, c);
         c.gridx = 0; c.gridy++;
         form.add(new JLabel("Script:"), c); c.gridx = 1; form.add(scriptField, c);
+        c.gridx = 0; c.gridy++;
+        form.add(new JLabel("Scale (size):"), c); c.gridx = 1; form.add(scaleField, c);
 
         JPanel buttons = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 4));
         JButton apply = new JButton("Apply"); apply.addActionListener(e -> applyEntity());
@@ -482,7 +487,14 @@ public final class EditorFrame extends JFrame {
             status("Bad coordinates"); return;
         }
         String script = scriptField.getText().trim();
-        es.set(selectedEntity, new MapEntity(id, prefab, new WorldPosition(x, y, z), script.isEmpty() ? null : script));
+        double scale;
+        try {
+            scale = scaleField.getText().trim().isEmpty() ? e.scale() : Double.parseDouble(scaleField.getText().trim());
+        } catch (NumberFormatException ex) {
+            status("Bad scale"); return;
+        }
+        if (scale < 0.01) scale = 0.01;
+        es.set(selectedEntity, new MapEntity(id, prefab, new WorldPosition(x, y, z), script.isEmpty() ? null : script, scale));
         map = new RMap(map.name(), map.tileSize(), map.width(), map.height(), map.layers(), es);
         endEditing();
         syncUi();

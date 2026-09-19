@@ -8,11 +8,10 @@ import rpg.engine.pak.PakAssets;
 import rpg.engine.pak.PakImage;
 
 /**
- * Pak-backed texture atlas for the Android map editor. Loads {@code tile/*} and {@code sprite/*}
- * entries from the shared host folder ({@code data/host}, plus packs cached from remote servers)
- * and converts the raw RGBA rasters to {@link Bitmap}s. Indices match the runtime contract:
- * tile id / entity resource are indexes into the sorted {@code tile/*} / {@code sprite/*} arrays
- * (see {@link PakAssets}).
+ * Pak-backed texture atlas for the Android map editor and game client. Loads {@code tile/*} and
+ * {@code sprite/*} entries from the shared host folder ({@code data/host}, plus packs cached from
+ * remote servers) and converts the raw RGBA rasters to {@link Bitmap}s. Sprites are addressed BY
+ * NAME — the same {@code sprite/*} short keys the server sends on the wire (see {@link PakAssets}).
  */
 final class PakAtlas {
 
@@ -60,14 +59,6 @@ final class PakAtlas {
         int i = spriteIndex(prefab);
         return i < 0 ? null : sprites[i];
     }
-
-    /** Sprite by {@code Snapshot.EntityState.resource()} index (matches the sorted {@code sprite/*} order). */
-    Bitmap spriteImageAt(int index) {
-        return index >= 0 && index < sprites.length ? sprites[index] : null;
-    }
-
-    /** The special {@code sprite/player} entry, used for entities the server marks resource == -1. */
-    Bitmap playerSprite() { return spriteImage("player"); }
 
     private static Bitmap[] toBitmaps(PakImage[] imgs) {
         Bitmap[] out = new Bitmap[imgs.length];

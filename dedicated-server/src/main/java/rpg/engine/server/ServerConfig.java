@@ -2,6 +2,7 @@ package rpg.engine.server;
 
 import rpg.engine.core.io.DataDir;
 
+import java.io.IOException;
 import java.nio.file.*;
 import java.util.List;
 import java.util.function.Consumer;
@@ -31,6 +32,15 @@ public final class ServerConfig {
     public static ServerHost.Config resolve(Path dataDir, int port, int tickHz, Consumer<String> warn) {
         Path hostDir = dataDir.resolve("host");
         java.util.function.Consumer<String> w = warn == null ? s -> {} : warn;
+
+        // The server host folder is created when missing, so data/host always exists: every host —
+        // the desktop client's local server, the CLI and the admin console — resolves through here
+        // (Android creates the same folder in AppStorage#hostDir()).
+        try {
+            Files.createDirectories(hostDir);
+        } catch (IOException e) {
+            w.accept("Cannot create " + hostDir + ": " + e.getMessage());
+        }
 
         List<Path> maps = DataDir.listIn(hostDir, ".rmap");
         Path map = null;

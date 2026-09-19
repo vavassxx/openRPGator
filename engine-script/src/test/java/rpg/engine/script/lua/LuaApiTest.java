@@ -133,6 +133,16 @@ class LuaApiTest {
         assertEquals(42, globals.get("t").toint());
     }
 
+    // ── entity scale ───────────────────────────────────────────────
+    @Test
+    void entityScaleDefaultsToOneAndSettable() {
+        scripts.execute(
+                "local e = world.spawn('scaled');"
+                + " assert(e.scale() == 1.0);"
+                + " e.set_scale(2.5); assert(e.scale() == 2.5);"
+                + " e.set_scale(0.1); assert(e.scale() == 0.1)", "scale_test");
+    }
+
     // ── entity / self scoped binding ───────────────────────────────
     @Test
     void entityAndSelfBoundDuringScript() {

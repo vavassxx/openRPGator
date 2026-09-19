@@ -21,8 +21,8 @@ class ProtocolTest {
                 roundTrip(new Input(1.25, -2.5, Input.PRIMARY | Input.INTERACT)));
 
         Snapshot snapshot = new Snapshot(List.of(
-                new Snapshot.EntityState(1, 1.0, 2.0, 0.0, 4),
-                new Snapshot.EntityState(2, -3.5, 4.25, 1.5, -1)
+                new Snapshot.EntityState(1, 1.0, 2.0, 0.0, "guard", 1.0),
+                new Snapshot.EntityState(2, -3.5, 4.25, 1.5, "player", 2.5)
         ));
         assertEquals(snapshot, roundTrip(snapshot));
 

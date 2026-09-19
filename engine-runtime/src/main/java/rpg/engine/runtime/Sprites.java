@@ -2,72 +2,40 @@ package rpg.engine.runtime;
 
 import rpg.engine.map.MapEntity;
 import rpg.engine.map.RMap;
-import java.util.*;
+
+import java.util.Set;
 
 /**
- * Server-side mapping from a map entity prefab to the numeric sprite index placed on the wire
- * as {@code Snapshot.EntityState.resource()}. The index is the prefab's position in the
- * alphabetically sorted list of distinct entity prefabs, so the server (which computes it from
- * the .rmap) and the packer (which stores sprites as {@code sprite/<prefab>.png}) agree without
- * extra handshaking.
+ * Sprite contract between server and client: an entity's texture is addressed by NAME — the
+ * {@code sprite/*} key in the asset pack. Map entities carry the sprite name as their prefab
+ * (e.g. a {@code rat} entity → {@code sprite/rat}); spawned players always use {@code player}.
  *
- * Prefab is the explicit texture binding authored in the map editor: each entity's visual is
- * chosen by assigning it a prefab that matches a {@code sprite/*} key in the asset pack.
- *
- * Entities without a prefab (e.g. players spawned from {@code Hello}) resolve to -1, which
- * clients render using the special {@code sprite/player} entry.
+ * <p>There is deliberately no numeric index and no "unused key" fallback: a prefab that does not
+ * exist in the pack resolves to {@code null} and the client draws a marker instead of silently
+ * showing an unrelated texture. Pack compatibility is checked by {@code SpritesTest} against the
+ * real {@code examples/host} map and {@code basic.pak}.
  */
 public final class Sprites {
     private Sprites() {}
 
-    public static Map<String, Integer> byPrefab(RMap map) {
-        TreeSet<String> prefabs = new TreeSet<>();
-        for (MapEntity e : map.entities()) {
-            if (e.prefab() != null && !e.prefab().isBlank()) prefabs.add(e.prefab());
-        }
-        Map<String, Integer> out = new HashMap<>();
-        int i = 0;
-        for (String prefab : prefabs) out.put(prefab, i++);
-        return out;
-    }
+    /** {@code player} — sprite key used for entities spawned without a prefab (players). */
+    public static final String PLAYER = "player";
 
     /**
-     * Prefab → sprite-index map that matches the client's sprite array regardless of gaps in
-     * the {@code sprite/*} key set.
-     *
-     * <p>Prefabs that equal a pak key ({@code sprite/<prefab>} present in the packs) resolve to
-     * the exact index that key has in the client's sorted array. Remaining prefabs (e.g. semantic
-     * names like {@code npc} in hand-authored maps) are assigned to the still-unused pak keys in
-     * sorted order, which reproduces the classic prefab-order look while keeping every index inside
-     * the client array.
-     *
-     * @param pakIndex key → sorted-array-index map from {@code PakAssets.spriteKeyIndex}
+     * The sprite key an entity prefab resolves to: the prefab itself when the client packs carry
+     * {@code sprite/<prefab>}, otherwise {@code null} (no texture — render a marker/none).
      */
-    public static Map<String, Integer> byPrefabInPak(RMap map, Map<String, Integer> pakIndex) {
-        TreeSet<String> prefabs = new TreeSet<>();
-        for (MapEntity e : map.entities()) {
-            if (e.prefab() != null && !e.prefab().isBlank()) prefabs.add(e.prefab());
-        }
-        if (prefabs.isEmpty()) return Map.of();
-        Map<String, Integer> out = new HashMap<>();
-        for (String prefab : prefabs) {
-            Integer idx = pakIndex.get(prefab);
-            if (idx != null) out.put(prefab, idx);
-        }
-        // unused keys in the client's sorted order; leftover prefabs take them one by one
-        List<String> unused = new ArrayList<>(pakIndex.keySet());
-        for (String taken : out.keySet()) unused.remove(taken);
-        unused.sort(Comparator.comparingInt(pakIndex::get));
-        int i = 0;
-        for (String prefab : prefabs) {
-            if (out.containsKey(prefab)) continue;
-            if (i >= unused.size()) break;
-            out.put(prefab, pakIndex.get(unused.get(i++)));
-        }
-        return out;
+    public static String resolve(Set<String> pakSpriteKeys, String prefab) {
+        if (prefab == null || prefab.isBlank()) return null;
+        return pakSpriteKeys.contains(prefab) ? prefab : null;
     }
 
-    public static int resourceOf(Map<String, Integer> byPrefab, String prefab) {
-        return byPrefab == null || prefab == null ? -1 : byPrefab.getOrDefault(prefab, -1);
+    /** All distinct non-blank entity prefabs of a map. */
+    public static Set<String> prefabsOf(RMap map) {
+        java.util.TreeSet<String> out = new java.util.TreeSet<>();
+        for (MapEntity e : map.entities()) {
+            if (e.prefab() != null && !e.prefab().isBlank()) out.add(e.prefab());
+        }
+        return out;
     }
 }

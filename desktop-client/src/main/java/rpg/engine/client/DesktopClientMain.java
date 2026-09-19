@@ -13,6 +13,8 @@ import rpg.engine.pak.PakAssets;
 import java.io.*;
 import java.nio.file.*;
 import java.util.*;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -55,6 +57,8 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
     private volatile boolean pakDownloading;
     private volatile String pakStatus = "";
     private volatile PakAssets pakAssets = PakAssets.empty();
+    /** Set by the network thread when new assets landed; consumed by the render thread for GL upload. */
+    private final AtomicBoolean applyAssetsPending = new AtomicBoolean(false);
 
     private GameRuntime runtime;
     private RMap map;
@@ -76,8 +80,8 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
     private volatile String statusText = "Offline";
     private volatile boolean connected;
 
-    private final List<ToastRecord> toasts = new ArrayList<>();
-    private ActiveDialog activeDialog;
+    private final List<ToastRecord> toasts = new CopyOnWriteArrayList<>();
+    private volatile ActiveDialog activeDialog;
 
     private record ToastRecord(String text, long timestamp) {}
     private record ActiveDialog(long dialogId, String text, List<String> choices) {}
@@ -91,6 +95,15 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
         parseArgs(args);
         loadConfig();
 
+        // The server host folder (~/.openrpgator/data/host) is created up-front, so starting the
+        // local server or dropping maps/packs in later always finds the folder (legacy data/maps,
+        // data/paks are migrated in too). ServerConfig.resolve also creates it, as a safety net.
+        try {
+            DataDir.ensure();
+        } catch (IOException e) {
+            System.err.println("openRPGator: cannot create data folder " + DataDir.root() + ": " + e.getMessage());
+        }
+
         // ── Renderer ─────────────────────────────────────────────
         renderer = new LwjglRenderer(1280, 720, "openRPGator");
         session = new DesktopClientSession(this);
@@ -100,6 +113,14 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
         // ── Main loop ────────────────────────────────────────────
         while (!renderer.shouldClose()) {
             renderer.poll();
+
+            // Upload client assets on the render thread (the GL context lives here). onConnected
+            // builds PakAssets on the network thread and only sets the flag.
+            if (applyAssetsPending.getAndSet(false)) {
+                renderer.setTileImages(pakAssets.tileImages());
+                renderer.setSpriteImages(pakAssets.spriteImages(), pakAssets.spriteKeys());
+            }
+
             int w = renderer.framebufferWidth(), h = renderer.framebufferHeight();
 
             switch (screen) {
@@ -109,7 +130,7 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
                 case GAME -> renderGame(w, h);
             }
 
-            renderer.end();
+            if (!renderer.isClosed()) renderer.end();
         }
 
         // ── Cleanup ──────────────────────────────────────────────
@@ -222,7 +243,7 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
             localServer.start(localPort);
             mapPath = localServer.autoMapPath();
             if (mapPath != null) addToast("Host map: " + mapPath.getFileName());
-            statusText = "Local server on " + localPort + " @ " + localTickRate + " Hz — connecting...";
+            statusText = "Local server on " + localPort + " @ " + localTickRate + " Hz - connecting...";
             beginConnect("127.0.0.1", localPort, playerName);
         } catch (Exception e) {
             statusText = "Failed: " + e.getMessage();
@@ -246,7 +267,7 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
     }
 
     private void beginConnect(String host, int port, String name) {
-        loadedPaks.clear();
+        synchronized (loadedPaks) { loadedPaks.clear(); }
         pakReceived = 0;
         pakTotal = 0;
         pakDownloading = false;
@@ -284,7 +305,7 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
             renderer.rect(fX, y, fw, 2, 0.4f, 0.6f, 0.4f, 1f);
             renderer.rect(fX, y + fh - 2, fw, 2, 0.4f, 0.6f, 0.4f, 1f);
             String display = f.value();
-            if (focused) display += "\u2588"; // block cursor
+            if (focused) display += "_"; // block cursor
             renderer.text(fX + 10, y + (fh - 8) / 2, display, 1, 0.92f, 0.92f, 0.95f);
             if (renderer.mouseClicked(0)
                     && renderer.mouseX() >= fX && renderer.mouseX() <= fX + fw
@@ -449,11 +470,9 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
                     renderer.tile(x, y, (x + y) % 3);
         }
 
-        // Entities from snapshots
-        int fallbackPlayerSprite = pakAssets.spriteCount() > 0 ? pakAssets.playerSpriteIndex() : -1;
+        // Entities from snapshots — sprites are addressed by name ("player", prefab, ...)
         for (Snapshot.EntityState e : snap.entities()) {
-            int res = e.resource() < 0 ? fallbackPlayerSprite : e.resource();
-            renderer.sprite(e.x(), e.y(), e.elevation(), res);
+            renderer.sprite(e.x(), e.y(), e.elevation(), e.sprite(), e.scale());
         }
 
         // ── HUD (screen-space overlay) ───────────────────────────
@@ -574,12 +593,18 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
                 map = RMapIO.read(mapPath);
             } catch (Exception e) { addToast("Map load error: " + e.getMessage()); }
         }
-        // Load pak assets received during the handshake (sprites + tiles) into the renderer
-        if (!loadedPaks.isEmpty()) {
+        // Load pak assets received during the handshake (sprites + tiles) into the renderer.
+        // Cached paks are added by onPakCached, downloaded ones by onPakDone — both run on the
+        // network thread, so read a consistent snapshot under the lock.
+        List<Path> paks;
+        synchronized (loadedPaks) { paks = new ArrayList<>(loadedPaks); }
+        if (!paks.isEmpty()) {
             try {
-                pakAssets = PakAssets.fromPaks(loadedPaks.toArray(Path[]::new));
-                renderer.setTileImages(pakAssets.tileImages());
-                renderer.setSpriteImages(pakAssets.spriteImages());
+                pakAssets = PakAssets.fromPaks(paks.toArray(Path[]::new));
+                // The GL texture upload must run on the render thread (main loop) — never call
+                // OpenGL from the network thread (no GL context here → JVM aborts). We just build
+                // the atlas and flag it for the render thread to apply.
+                applyAssetsPending.set(true);
                 addToast("Assets: " + pakAssets.tileCount() + " tiles, "
                         + pakAssets.spriteCount() + " sprites");
             } catch (Exception e) {
@@ -624,8 +649,19 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
     @Override public boolean onPakCached(String name, long size) {
         Path p = cachedPakPath(name);
         if (p == null) return false;
-        try { return Files.exists(p) && Files.size(p) == size; }
-        catch (IOException e) { return false; }
+        try {
+            if (Files.exists(p) && Files.size(p) == size) {
+                // Cached packs are skipped on the wire, so no onPakDone will arrive for them —
+                // they must still enter the atlas for tiles/sprites to render.
+                synchronized (loadedPaks) {
+                    if (!loadedPaks.contains(p)) loadedPaks.add(p);
+                }
+                return true;
+            }
+        } catch (IOException e) {
+            return false;
+        }
+        return false;
     }
 
     @Override public void onPakDone(String name, byte[] data) {
@@ -634,7 +670,7 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
         try {
             Files.createDirectories(p.getParent());
             Files.write(p, data);
-            loadedPaks.add(p);
+            synchronized (loadedPaks) { loadedPaks.add(p); }
             pakStatus = "Received " + name;
         } catch (IOException e) {
             addToast("Pak cache error: " + e.getMessage());

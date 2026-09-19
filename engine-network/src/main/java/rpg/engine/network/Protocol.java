@@ -39,7 +39,7 @@ public final class Protocol {
             for (Snapshot.EntityState e : p.entities()) {
                 data.writeLong(e.id()); data.writeDouble(e.x());
                 data.writeDouble(e.y()); data.writeDouble(e.elevation());
-                data.writeInt(e.resource());
+                writeString(data, e.sprite()); data.writeDouble(e.scale());
             }
         } else if (packet instanceof Notify p) {
             writeString(data, p.text());
@@ -104,7 +104,7 @@ public final class Protocol {
         List<Snapshot.EntityState> entities = new ArrayList<>(count);
         for (int i = 0; i < count; i++)
             entities.add(new Snapshot.EntityState(in.readLong(), in.readDouble(), in.readDouble(), in.readDouble(),
-                    in.readInt()));
+                    readString(in), in.readDouble()));
         return new Snapshot(entities);
     }
 

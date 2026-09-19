@@ -26,6 +26,7 @@ final class ClientSession {
     private Socket socket;
     private OutputStream out;
     private final Object lock = new Object();
+    private final ExecutorService sender = Executors.newSingleThreadExecutor();
 
     ClientSession(Listener l, File pakCacheDir) { listener = l; this.pakCacheDir = pakCacheDir; }
 
@@ -80,13 +81,22 @@ final class ClientSession {
     }
 
     void input(double dx, double dy, int actions) {
-        try { synchronized (lock) { if (out != null) Protocol.write(out, new Input(dx, dy, actions)); } }
-        catch (IOException e) { listener.status("Send failed: " + e.getMessage()); }
+        // socket writes are blocking-IO: never touch them on the UI thread
+        try {
+            sender.execute(() -> {
+                try { synchronized (lock) { if (out != null) Protocol.write(out, new Input(dx, dy, actions)); } }
+                catch (IOException e) { listener.status("Send failed: " + e.getMessage()); }
+            });
+        } catch (RejectedExecutionException ignored) {}
     }
 
     void dialogResponse(long dialogId, int choice) {
-        try { synchronized (lock) { if (out != null) Protocol.write(out, new DialogResponse(dialogId, choice)); } }
-        catch (IOException e) { listener.status("Send failed: " + e.getMessage()); }
+        try {
+            sender.execute(() -> {
+                try { synchronized (lock) { if (out != null) Protocol.write(out, new DialogResponse(dialogId, choice)); } }
+                catch (IOException e) { listener.status("Send failed: " + e.getMessage()); }
+            });
+        } catch (RejectedExecutionException ignored) {}
     }
 
     void disconnect() {

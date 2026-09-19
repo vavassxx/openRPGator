@@ -5,6 +5,7 @@ import org.luaj.vm2.lib.*;
 import static org.luaj.vm2.LuaValue.*;
 import rpg.engine.core.component.Transform;
 import rpg.engine.core.component.Trigger;
+import rpg.engine.core.component.Scale;
 import rpg.engine.core.ecs.EntityId;
 import rpg.engine.core.component.Name;
 import rpg.engine.core.math.WorldPosition;
@@ -286,6 +287,8 @@ public final class LuaApi {
         t.set("set_position", new ThreeArgFunction() { public LuaValue call(LuaValue x, LuaValue y, LuaValue z) { world.entities().set(id, new Transform(new WorldPosition(x.todouble(), y.todouble(), z.todouble()), 0)); return NONE; }});
         t.set("set_trigger", new OneArgFunction() { public LuaValue call(LuaValue radius) { world.entities().set(id, new Trigger(radius.checkdouble())); return NONE; }});
         t.set("trigger_radius", new ZeroArgFunction() { public LuaValue call() { return world.entities().get(id, Trigger.class).map(r -> (LuaValue) valueOf(r.radius())).orElse(NIL); }});
+        t.set("set_scale", new OneArgFunction() { public LuaValue call(LuaValue value) { world.entities().set(id, new Scale(Math.max(0.01, value.checkdouble()))); return NONE; }});
+        t.set("scale", new ZeroArgFunction() { public LuaValue call() { return valueOf(world.entities().get(id, Scale.class).map(Scale::value).orElse(1.0)); }});
         t.set("on_tick", new OneArgFunction() { public LuaValue call(LuaValue fn) { register(tickHandlers, id, fn); return NONE; }});
         t.set("on_enter", new OneArgFunction() { public LuaValue call(LuaValue fn) { register(enterHandlers, id, fn); return NONE; }});
         t.set("on_exit", new OneArgFunction() { public LuaValue call(LuaValue fn) { register(exitHandlers, id, fn); return NONE; }});

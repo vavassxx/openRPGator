@@ -2,6 +2,10 @@
 
 Requires JDK 21 and Gradle 8.10+ (Android builds additionally require the Android SDK and Android Gradle Plugin prerequisites).
 
+JVM toolchains are auto-resolved through the foojay resolver registered in `settings.gradle`,
+which also detects SDKMAN-installed JDKs (`~/.sdkman/candidates/java`); a plain `sdk install java`
+17.x-tem + 21.x-ms is enough — no manual JVM setup needed.
+
 Desktop/server:
 
     gradle build

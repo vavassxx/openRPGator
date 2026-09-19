@@ -1,72 +1,67 @@
 package rpg.engine.runtime;
 
-import org.junit.jupiter.api.Test;
-
-import rpg.engine.map.MapEntity;
-import rpg.engine.map.RMap;
-import rpg.engine.map.TileLayer;
-import rpg.engine.core.math.WorldPosition;
-
-import java.util.*;
-
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Set;
+import java.util.TreeSet;
+
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Assumptions;
+
+import rpg.engine.map.RMap;
+import rpg.engine.map.RMapIO;
+import rpg.engine.pak.PakFile;
+
 /**
- * Sprite-index contract between server and client: server computes prefab → resource indices
- * that must land inside the client's sorted {@code sprite/*} array even when the pak key set
- * has gaps or the map uses semantic prefabs.
+ * Sprite contract: an entity's texture is addressed by NAME — the prefab string must equal a
+ * {@code sprite/*} short key in the asset packs. There is deliberately no index and no
+ * "unused key" fallback: unknown prefabs resolve to {@code null} (client draws a marker).
  */
 class SpritesTest {
 
-    /** The client's array order for the current basic.pak (sprite/7 missing). */
-    private static Map<String, Integer> pakIndex() {
-        Map<String, Integer> m = new HashMap<>();
-        m.put("0", 0); m.put("1", 1); m.put("2", 2); m.put("3", 3);
-        m.put("4", 4); m.put("5", 5); m.put("6", 6); m.put("8", 7);
-        m.put("9", 8); m.put("player", 9);
-        return m;
+    @Test void resolveHonorsExactNames() {
+        Set<String> keys = Set.of("player", "rat", "arch", "well");
+        assertEquals("rat", Sprites.resolve(keys, "rat"));
+        assertEquals("player", Sprites.resolve(keys, "player"));
+        // Type-dispatched names (npc/item/mob/...) are NOT sprite keys -> nothing to draw.
+        assertNull(Sprites.resolve(keys, "npc"));
+        assertNull(Sprites.resolve(keys, "portal"));
     }
 
-    private static RMap mapWith(String... prefabs) {
-        List<MapEntity> es = new ArrayList<>();
-        int i = 0;
-        for (String p : prefabs) es.add(new MapEntity("e" + i++, p, new WorldPosition(0, 0, 0), null));
-        return new RMap("t", 32, 10, 10, List.of(new TileLayer("ground", 10, 10, new int[100], false)), es);
+    @Test void resolveRejectsBlankAndNullPrefabs() {
+        assertNull(Sprites.resolve(Set.of("player"), null));
+        assertNull(Sprites.resolve(Set.of("player"), ""));
+        assertNull(Sprites.resolve(Set.of("player"), "   "));
     }
 
-    @Test void prefabEqualsPakKeyResolvesExactIndex() {
-        Map<String, Integer> m = Sprites.byPrefabInPak(mapWith("7", "player"), pakIndex());
-        assertEquals(9, m.get("player"));   // sprite/player -> its exact array index
-        assertEquals(0, m.get("7"));        // sprite/7 absent: key skipped, prefab takes first free slot
-        assertNull(m.get("8"));             // unclaimed pak keys stay out of the map
+    @Test void prefabsOfCollectsDistinctNames() {
+        var mapWithout = new rpg.engine.map.RMap("t", 32, 2, 2,
+                java.util.List.of(new rpg.engine.map.TileLayer("g", 2, 2, new int[4], false)),
+                java.util.List.of(new rpg.engine.map.MapEntity("a", "rat", new rpg.engine.core.math.WorldPosition(0, 0, 0), null),
+                        new rpg.engine.map.MapEntity("b", "rat", new rpg.engine.core.math.WorldPosition(1, 0, 0), null),
+                        new rpg.engine.map.MapEntity("c", "well", new rpg.engine.core.math.WorldPosition(2, 0, 0), null)));
+        assertEquals(new TreeSet<>(Set.of("rat", "well")), Sprites.prefabsOf(mapWithout));
     }
 
-    @Test void semanticPrefabsMapIntoUnusedKeysInOrder() {
-        Map<String, Integer> m = Sprites.byPrefabInPak(mapWith("npc", "portal", "item"), pakIndex());
-        assertEquals(0, m.get("item"));    // sorted-prefab assignment: item, npc, portal -> 0, 1, 2
-        assertEquals(1, m.get("npc"));
-        assertEquals(2, m.get("portal"));
-        assertEquals(3, m.size());
-    }
-
-    @Test void everyAssignedIndexIsInsideTheClientArray() {
-        Map<String, Integer> m = Sprites.byPrefabInPak(
-                mapWith("conductor", "item", "mob", "npc", "portal", "prop", "7"), pakIndex());
-        int n = pakIndex().size();
-        for (int v : m.values()) {
-            assertTrue(v >= 0 && v < n, "index " + v + " must be a valid client sprite slot");
-        }
-        assertEquals(7, m.size());
-    }
-
-    @Test void emptyPrefabsYieldEmptyMap() {
-        assertEquals(Map.of(), Sprites.byPrefabInPak(mapWith(), pakIndex()));
-    }
-
-    @Test void noPaksFallsBackToPrefabOrder() {
-        RMap map = mapWith("npc", "portal");
-        Map<String, Integer> m = Sprites.byPrefab(map);
-        assertEquals(1, m.get("portal"));
-        assertEquals(0, m.get("npc"));
+    /**
+     * Content-coverage guard against the "type-prefab" footgun: every entity prefab in the shipped
+     * town map must have a matching sprite in basic.pak, otherwise it would render as a marker.
+     * Reads real files relative to the test working dir (Gradle: module dir → {@code ../examples}).
+     */
+    @Test
+    void shippedMapPrefabsAllResolveInShippedPak() throws Exception {
+        Path mapPath = Path.of("../examples/host/town.rmap"), pakPath = Path.of("../assets/basic.pak");
+        Assumptions.assumeTrue(Files.isRegularFile(mapPath) && Files.isRegularFile(pakPath),
+                "repo content not present in this checkout");
+        RMap map = RMapIO.read(mapPath);
+        PakFile pak = PakFile.readIndex(pakPath);
+        Set<String> keys = new TreeSet<>();
+        for (String n : pak.namesByPrefix("sprite/")) keys.add(n.substring(7));
+        Set<String> missing = new TreeSet<>();
+        for (String p : Sprites.prefabsOf(map))
+            if (!keys.contains(p)) missing.add(p);
+        assertTrue(missing.isEmpty(), "map prefabs without sprite in basic.pak: " + missing);
     }
 }

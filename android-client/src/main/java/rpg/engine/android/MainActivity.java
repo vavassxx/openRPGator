@@ -30,6 +30,7 @@ public final class MainActivity extends Activity implements ClientSession.Listen
     private SharedPreferences prefs;
     private AppStorage appStorage;
     private AppLogger logger;
+    private AlertDialog currentDialog;
     private static final int PICK_STORAGE = 9001;
 
     @Override public void onCreate(Bundle state) {
@@ -517,23 +518,70 @@ public final class MainActivity extends Activity implements ClientSession.Listen
             if (UiLayout.KIND_NOTIFY.equals(u.kind())) {
                 Toast.makeText(this, u.bodyText(), Toast.LENGTH_LONG).show();
             } else if (UiLayout.KIND_DIALOG.equals(u.kind())) {
-                AlertDialog.Builder b = new AlertDialog.Builder(this);
-                b.setTitle("Dialog");
-                List<String> choices = u.choiceTexts();
-                if (choices.isEmpty()) {
-                    b.setMessage(u.bodyText());
-                    b.setPositiveButton("OK", (di, which) ->
-                            session.dialogResponse(u.dialogId(), -1));
-                } else {
-                    b.setMessage(u.bodyText());
-                    b.setCancelable(false);
-                    b.setItems(choices.toArray(new String[0]), (di, which) ->
-                            session.dialogResponse(u.dialogId(), which));
-                }
-                b.show();
+                logger.info("Dialog id=" + u.dialogId() + " choices=" + u.choiceTexts());
+                showDialog(u);
             }
         });
     }
+
+    /**
+     * Server dialog rendered with an explicit content view (message + one button per choice).
+     * The plain {@code AlertDialog.Builder.setItems} path produced an empty dialog on device
+     * (title+message but no list, no buttons), so choices are built as real buttons.
+     */
+    private void showDialog(UiLayout u) {
+        AlertDialog.Builder b = new AlertDialog.Builder(this);
+        b.setTitle("Dialog");
+        b.setCancelable(false);
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setPadding(dp(24), dp(12), dp(24), dp(12));
+        TextView body = new TextView(this);
+        body.setText(u.bodyText());
+        body.setTextColor(Color.WHITE);
+        body.setTextSize(15);
+        content.addView(body, new LinearLayout.LayoutParams(-1, -2));
+
+        List<String> choices = u.choiceTexts();
+        if (choices.isEmpty()) {
+            Button ok = dialogChoiceButton("OK");
+            ok.setOnClickListener(v -> {
+                session.dialogResponse(u.dialogId(), -1);
+                dismissDialog();
+            });
+            content.addView(ok, new LinearLayout.LayoutParams(-1, dp(42)));
+        } else {
+            for (int i = 0; i < choices.size(); i++) {
+                Button btn = dialogChoiceButton(choices.get(i));
+                int which = i;
+                btn.setOnClickListener(v -> {
+                    session.dialogResponse(u.dialogId(), which);
+                    dismissDialog();
+                });
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, dp(42));
+                lp.topMargin = dp(6);
+                content.addView(btn, lp);
+            }
+        }
+        b.setView(content);
+        currentDialog = b.show();
+    }
+
+    private Button dialogChoiceButton(String text) {
+        Button btn = new Button(this);
+        btn.setText(text);
+        btn.setAllCaps(false);
+        btn.setTextSize(14);
+        return btn;
+    }
+
+    private void dismissDialog() {
+        if (currentDialog != null) {
+            currentDialog.dismiss();
+            currentDialog = null;
+        }
+    }
+
     @Override protected void onDestroy() { logger.info("Application stopping"); session.disconnect(); if (localServer != null) localServer.stop(); super.onDestroy(); }
 
     // ── Game view ───────────────────────────────────────────────────
@@ -569,9 +617,9 @@ public final class MainActivity extends Activity implements ClientSession.Listen
             for (Snapshot.EntityState e : snapshot.entities()) {
                 float sx = ox + (float)(e.x() - e.y()) * tile * .5f;
                 float sy = oy + (float)(e.x() + e.y()) * tile * .25f - (float)e.elevation() * 12;
-                Bitmap bmp = e.resource() < 0 ? atlas.playerSprite() : atlas.spriteImageAt(e.resource());
+                Bitmap bmp = atlas.spriteImage(e.sprite());
                 if (bmp != null) {
-                    float s = 40;
+                    float s = 40 * (float) e.scale();
                     float sc = Math.min(s / bmp.getWidth(), s / bmp.getHeight());
                     int w = (int) (bmp.getWidth() * sc), h = (int) (bmp.getHeight() * sc);
                     Rect dst = new Rect((int) (sx - w / 2f), (int) (sy - h / 2f), (int) (sx + w / 2f), (int) (sy + h / 2f));

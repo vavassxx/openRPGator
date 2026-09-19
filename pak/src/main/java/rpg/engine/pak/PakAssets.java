@@ -8,24 +8,27 @@ import java.util.*;
 
 /**
  * Client-side asset manager built from loaded {@link PakFile}s.
- * Provides zero-based arrays for tile raster images (indexed by tile id) and sprite raster
- * images (indexed by {@code Snapshot.EntityState.resource()}), both derived from the sorted
- * {@code tile/*} and {@code sprite/*} entries in the combined asset packs.
+ * Provides a zero-based array for tile rasters (indexed by tile id) and sprite rasters addressed
+ * BY NAME (via {@link #spriteImage(String)}), both derived from the sorted {@code tile/*} and
+ * {@code sprite/*} entries in the combined asset packs.
  */
 public final class PakAssets {
 
     private final PakImage[] tiles;
     private final PakImage[] sprites;
     private final String[] spriteKeys;
+    private final Map<String, Integer> spriteIndex;
     private final int playerSpriteIndex;
     private final int totalTileBytes;
     private final int totalSpriteBytes;
 
     private PakAssets(PakImage[] tiles, PakImage[] sprites, String[] spriteKeys,
-                      int playerSpriteIndex, int totalTileBytes, int totalSpriteBytes) {
+                      Map<String, Integer> spriteIndex, int playerSpriteIndex,
+                      int totalTileBytes, int totalSpriteBytes) {
         this.tiles = tiles;
         this.sprites = sprites;
         this.spriteKeys = spriteKeys;
+        this.spriteIndex = spriteIndex;
         this.playerSpriteIndex = playerSpriteIndex;
         this.totalTileBytes = totalTileBytes;
         this.totalSpriteBytes = totalSpriteBytes;
@@ -33,19 +36,32 @@ public final class PakAssets {
 
     public PakImage tileImage(int id) { return id >= 0 && id < tiles.length ? tiles[id] : null; }
     public PakImage spriteImage(int id) { return id >= 0 && id < sprites.length ? sprites[id] : null; }
+    /** Sprite by NAME ({@code sprite/*} short key, e.g. {@code "player"}); {@code null} when absent. */
+    public PakImage spriteImage(String key) {
+        if (key == null) return null;
+        Integer i = spriteIndex.get(key);
+        return i == null ? null : sprites[i];
+    }
+    /** Index of a sprite by name, or -1 when the pak has no such entry. */
+    public int spriteIndex(String key) {
+        Integer i = key == null ? null : spriteIndex.get(key);
+        return i == null ? -1 : i;
+    }
     public int tileCount() { return tiles.length; }
     public int spriteCount() { return sprites.length; }
     public int totalTileBytes() { return totalTileBytes; }
     public int totalSpriteBytes() { return totalSpriteBytes; }
     public PakImage[] tileImages() { return tiles; }
     public PakImage[] spriteImages() { return sprites; }
-    /** Sorted short keys of {@code sprite/*} entries (e.g. {@code player}), index == sprite id. */
+    /** Sorted short keys of {@code sprite/*} entries (e.g. {@code player}); index == sprite id. */
     public String[] spriteKeys() { return spriteKeys; }
-    /** Index of the {@code sprite/player} entry (for entities with resource == -1), or -1. */
+    /** Index of the {@code sprite/player} entry, or -1. */
     public int playerSpriteIndex() { return playerSpriteIndex; }
 
     /** Empty assets — no packs loaded. */
-    public static PakAssets empty() { return new PakAssets(new PakImage[0], new PakImage[0], new String[0], -1, 0, 0); }
+    public static PakAssets empty() {
+        return new PakAssets(new PakImage[0], new PakImage[0], new String[0], Map.of(), -1, 0, 0);
+    }
 
     /**
      * Reads a pak file, loads {@code tile/*} and {@code sprite/*} entries into zero-based
@@ -69,30 +85,13 @@ public final class PakAssets {
         PakImage[] tiles = tileMap.values().toArray(PakImage[]::new);
         PakImage[] sprites = spriteMap.values().toArray(PakImage[]::new);
         String[] spriteKeys = spriteMap.keySet().toArray(String[]::new);
-        int pIdx = -1;
-        for (int i = 0; i < spriteKeys.length; i++) if ("player".equals(spriteKeys[i])) { pIdx = i; break; }
+        Map<String, Integer> spriteIndex = new HashMap<>();
+        for (int i = 0; i < spriteKeys.length; i++) spriteIndex.put(spriteKeys[i], i);
+        int pIdx = spriteIndex.getOrDefault("player", -1);
         int tBytes = 0, sBytes = 0;
         for (PakImage p : tiles) tBytes += p.bytes();
         for (PakImage p : sprites) sBytes += p.bytes();
-        return new PakAssets(tiles, sprites, spriteKeys, pIdx, tBytes, sBytes);
-    }
-
-    /**
-     * Maps each {@code sprite/*} short key (sorted union across paks) to its zero-based sprite
-     * index — exactly the ordering the client builds from {@link #fromPaks}. Servers use this to
-     * emit {@code Snapshot.EntityState.resource()} values that always match the client's sprite
-     * array, even when a pak is missing some entries (e.g. {@code sprite/7} absent).
-     */
-    public static Map<String, Integer> spriteKeyIndex(Path... pakFiles) throws IOException {
-        TreeSet<String> keys = new TreeSet<>();
-        for (Path path : pakFiles) {
-            if (path == null || !Files.exists(path)) continue;
-            for (String n : PakFile.readIndex(path).namesByPrefix("sprite/")) keys.add(n.substring(7));
-        }
-        Map<String, Integer> out = new HashMap<>();
-        int i = 0;
-        for (String k : keys) out.put(k, i++);
-        return out;
+        return new PakAssets(tiles, sprites, spriteKeys, spriteIndex, pIdx, tBytes, sBytes);
     }
 
     /**

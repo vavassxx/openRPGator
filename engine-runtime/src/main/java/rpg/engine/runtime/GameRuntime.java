@@ -5,8 +5,11 @@ import rpg.engine.world.GameWorld;
 import rpg.engine.script.lua.LuaRuntime;
 import rpg.engine.script.UiSink;
 import rpg.engine.core.ecs.EntityId;
+import java.io.ByteArrayOutputStream;
+import java.io.FileInputStream;
 import java.io.IOException;
-import java.nio.file.Files;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import org.luaj.vm2.LuaError;
@@ -38,16 +41,32 @@ public final class GameRuntime {
             world.entities().set(id, new rpg.engine.core.component.Name(e.id()));
             world.entities().set(id, new rpg.engine.core.component.Prefab(e.prefab()));
             world.entities().set(id, new rpg.engine.core.component.Transform(e.position(), 0));
+            world.entities().set(id, new rpg.engine.core.component.Scale(e.scale()));
             String sp = e.script();
             if (sp != null && !sp.isBlank()) {
                 Path scriptPath = Path.of(sp);
                 if (!scriptPath.isAbsolute() && base != null) scriptPath = base.resolve(sp);
                 try {
-                    scripts.loadEntityScript(Files.readString(scriptPath), scriptPath.toString(), id);
+                    scripts.loadEntityScript(readUtf8(scriptPath), scriptPath.toString(), id);
                 } catch (LuaError ex) {
                     System.err.println("[Lua] script " + scriptPath + " failed: " + ex.getMessage());
                 }
             }
+        }
+    }
+
+    /**
+     * UTF-8 file read that works on every Android API level.
+     * {@code Files.readString} (Java 11) does not exist in Android's libcore and
+     * throws NoSuchMethodError at runtime, so the script is read via plain java.io.
+     */
+    private static String readUtf8(Path path) throws IOException {
+        try (InputStream in = new FileInputStream(path.toFile())) {
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = in.read(buf)) >= 0) out.write(buf, 0, n);
+            return new String(out.toByteArray(), StandardCharsets.UTF_8);
         }
     }
 

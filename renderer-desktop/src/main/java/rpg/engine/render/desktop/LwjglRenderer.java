@@ -13,6 +13,8 @@ import static org.lwjgl.system.MemoryStack.stackPush;
 
 import java.nio.ByteBuffer;
 import java.nio.IntBuffer;
+import java.util.HashMap;
+import java.util.Map;
 
 /**
  * LWJGL/GLFW immediate-mode renderer with dynamic window sizing,
@@ -39,16 +41,18 @@ public final class LwjglRenderer implements Renderer {
             KEY_TAB = GLFW_KEY_TAB;
 
     private long window;
+    private volatile boolean closed;
     private int fbw = 1280, fbh = 720;
 
     private double camX, camY;
     private double zoom = 1.0;
 
-    // ── Pak-backed textures (indexed by tile id / entity resource / "player" slot) ──
+    // ── Pak-backed textures (tiles by map tile id; sprites keyed by sprite name) ──
     private int[] tileTex = new int[0];
     private int[] spriteTex = new int[0];
     private int[] spriteTexW = new int[0];
     private int[] spriteTexH = new int[0];
+    private Map<String, Integer> spriteIndex = new HashMap<>();
 
     private GLFWWindowSizeCallback winSizeCb;
     private GLFWFramebufferSizeCallback fbSizeCb;
@@ -64,8 +68,14 @@ public final class LwjglRenderer implements Renderer {
     private double mouseX, mouseY;
     private int pendingChar;
 
-    // ── 5×7 bitmap font (ASCII 32..126), row-major, bits 4..0 = cols 4..0
+    // ── 5×7 bitmap font, row-major, bits 4..0 = cols 4..0 ─────────
+    // ASCII 32..126, then the Cyrillic А..Я (0x0410..0x042F) and а..я (0x0430..0x044F);
+    // lowercase naturally reuses the uppercase glyphs (standard for a 5×7 font). Ё/ё render as Е.
     private static final int FONT_FIRST = 32, FONT_LAST = 126;
+    private static final int FONT_ASCII_COUNT = FONT_LAST - FONT_FIRST + 1;   // 95
+    private static final int CYR_INDEX = FONT_ASCII_COUNT;                    // 95
+    private static final int CYR_LOWER_INDEX = CYR_INDEX + 32;                // 127
+    private static final int FONT_SIZE = CYR_LOWER_INDEX + 32;                // 159
     private static final byte[][] FONT = buildFont();
 
     public LwjglRenderer(int w, int h, String title) {
@@ -124,10 +134,11 @@ public final class LwjglRenderer implements Renderer {
     }
 
     // ── Lifecycle ──────────────────────────────────────────────────
-    public boolean shouldClose() { return glfwWindowShouldClose(window); }
+    public boolean shouldClose() { return closed || (window != 0 && glfwWindowShouldClose(window)); }
+    public boolean isClosed() { return closed; }
     public void poll() {
         resetEdges();
-        glfwPollEvents();
+        if (!closed) glfwPollEvents();
     }
 
     private String title = "";
@@ -148,6 +159,8 @@ public final class LwjglRenderer implements Renderer {
     @Override public void end() { glfwSwapBuffers(window); }
 
     @Override public void close() {
+        if (closed) return;
+        closed = true;
         if (keyCb != null) keyCb.free();
         if (charCb != null) charCb.free();
         if (winSizeCb != null) winSizeCb.free();
@@ -155,6 +168,7 @@ public final class LwjglRenderer implements Renderer {
         if (mouseBtnCb != null) mouseBtnCb.free();
         if (cursorPosCb != null) cursorPosCb.free();
         if (window != 0) glfwDestroyWindow(window);
+        window = 0;
         glfwTerminate();
     }
 
@@ -182,13 +196,18 @@ public final class LwjglRenderer implements Renderer {
         tileTex = upload(images);
     }
 
-    /** Uploads pak sprite rasters as GL textures; indexes match entity resources. */
-    public void setSpriteImages(PakImage[] images) {
+    /** Uploads pak sprite rasters as GL textures, keyed by sprite name (see {@code sprite(*)}). */
+    public void setSpriteImages(PakImage[] images, String[] keys) {
         int n = images.length;
         spriteTex = upload(images);
         spriteTexW = new int[n];
         spriteTexH = new int[n];
-        for (int i = 0; i < n; i++) { spriteTexW[i] = images[i].width(); spriteTexH[i] = images[i].height(); }
+        spriteIndex = new HashMap<>();
+        for (int i = 0; i < n; i++) {
+            if (images[i] == null) continue;
+            spriteTexW[i] = images[i].width(); spriteTexH[i] = images[i].height();
+            if (keys != null && i < keys.length && keys[i] != null) spriteIndex.put(keys[i], i);
+        }
     }
 
     private int[] upload(PakImage[] images) {
@@ -197,17 +216,22 @@ public final class LwjglRenderer implements Renderer {
         for (int i = 0; i < n; i++) {
             if (images[i] == null) continue;
             PakImage img = images[i];
+            int w = img.width(), h = img.height();
             int id = glGenTextures();
             glBindTexture(GL_TEXTURE_2D, id);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            // PakImage is row-major, top row first; OpenGL treats data row 0 as v=0 (the BOTTOM
+            // of the texture). Upload rows bottom-to-top so the image's top row lands at v=1 and
+            // quads drawn with v=1 at the top vertex render upright.
             ByteBuffer buf = BufferUtils.createByteBuffer(img.bytes());
-            buf.put(img.rgba());
+            int rowBytes = w * 4;
+            for (int r = h - 1; r >= 0; r--) buf.put(img.rgba(), r * rowBytes, rowBytes);
             buf.flip();
             glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, img.width(), img.height(), 0, GL_RGBA, GL_UNSIGNED_BYTE, buf);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, buf);
             ids[i] = id;
         }
         return ids;
@@ -239,14 +263,20 @@ public final class LwjglRenderer implements Renderer {
         }
     }
 
-    @Override public void sprite(double x, double y, double elevation, int resource) {
+    /**
+     * Draws the sprite addressed by {@code key} (a {@code sprite/*} pak entry, e.g. {@code player})
+     * at world position {@code (x,y)} with the given elevation. {@code scale} multiplies the
+     * sprite's native size; missing keys render as a small marker quad.
+     */
+    @Override public void sprite(double x, double y, double elevation, String key, double scale) {
         double sx = (x - y) * TILE_HW * zoom;
         double sy = (x + y) * TILE_HH * zoom - elevation * 8 * zoom;
-        int tex = resource >= 0 && resource < spriteTex.length ? spriteTex[resource] : 0;
-        int tw = resource >= 0 && resource < spriteTexW.length ? spriteTexW[resource] : 0;
-        int th = resource >= 0 && resource < spriteTexH.length ? spriteTexH[resource] : 0;
+        int idx = key == null ? -1 : spriteIndex.getOrDefault(key, -1);
+        int tex = idx >= 0 && idx < spriteTex.length ? spriteTex[idx] : 0;
+        int tw = idx >= 0 && idx < spriteTexW.length ? spriteTexW[idx] : 0;
+        int th = idx >= 0 && idx < spriteTexH.length ? spriteTexH[idx] : 0;
         if (tex != 0 && th > 0) {
-            double w = tw * zoom, h = th * zoom;
+            double w = tw * zoom * scale, h = th * zoom * scale;
             glEnable(GL_TEXTURE_2D);
             glBindTexture(GL_TEXTURE_2D, tex);
             glColor3f(1f, 1f, 1f);
@@ -294,9 +324,7 @@ public final class LwjglRenderer implements Renderer {
         for (int i = 0; i < text.length(); i++) {
             char ch = text.charAt(i);
             if (ch == '\n') { cx = 0; y += 8 * scale; continue; }
-            int idx = ch - FONT_FIRST;
-            if (idx < 0 || idx >= FONT.length) idx = '?' - FONT_FIRST;
-            byte[] glyph = FONT[idx];
+            byte[] glyph = FONT[fontIndex(ch)];
             for (int row = 0; row < 7; row++) {
                 byte bits = glyph[row];
                 for (int col = 0; col < 5; col++) {
@@ -372,8 +400,28 @@ public final class LwjglRenderer implements Renderer {
     }
 
     // ── Font data ─────────────────────────────────────────────────
+    /** Maps a character to its glyph slot: ASCII, Cyrillic А..Я / а..я, Ё/ё → Е, typographic
+     * punctuation → ASCII, else '?'. */
+    private static int fontIndex(char ch) {
+        if (ch >= FONT_FIRST && ch <= FONT_LAST) return ch - FONT_FIRST;
+        if (ch >= 0x0410 && ch <= 0x042F) return CYR_INDEX + (ch - 0x0410);
+        if (ch >= 0x0430 && ch <= 0x044F) return CYR_LOWER_INDEX + (ch - 0x0430);
+        if (ch == 0x0401 || ch == 0x0451) return CYR_INDEX + ('Е' - 0x0410); // Ё/ё render as Е
+        switch (ch) {
+            case '\u2013': case '\u2014': return '-' - FONT_FIRST;           // – — → -
+            case '\u2018': case '\u2019': return '\'' - FONT_FIRST;          // ' ' → '
+            case '\u201C': case '\u201D': case '\u201E': return '"' - FONT_FIRST; // " " „ → "
+            case '\u00AB': return '<' - FONT_FIRST;                          // « → <
+            case '\u00BB': return '>' - FONT_FIRST;                          // » → >
+            case '\u2026': return '.' - FONT_FIRST;                          // … → .
+            case '\u00A0': return ' ' - FONT_FIRST;                          // nbsp → space
+            default: break;
+        }
+        return '?' - FONT_FIRST;
+    }
+
     private static byte[][] buildFont() {
-        byte[][] f = new byte[FONT_LAST - FONT_FIRST + 1][7];
+        byte[][] f = new byte[FONT_SIZE][7];
         // space (32)
         f[0] = new byte[]{0x00,0x00,0x00,0x00,0x00,0x00,0x00};
         // ! (33)
@@ -505,6 +553,46 @@ public final class LwjglRenderer implements Renderer {
         f[93] = new byte[]{0x08,0x04,0x04,0x02,0x04,0x04,0x08};
         // ~ (126)
         f[94] = new byte[]{0x00,0x04,0x08,0x1F,0x08,0x04,0x00};
+
+        // ── Cyrillic А..Я (0x0410..0x042F), 5×7; lowercase а..я reuses the same glyphs ──
+        byte[][] cyr = new byte[][]{
+            // А  Б  В  Г  Д  Е  Ж  З  И  Й  К  Л  М  Н  О  П
+            {0x0E,0x11,0x11,0x1F,0x11,0x11,0x11},
+            {0x1E,0x10,0x16,0x19,0x11,0x11,0x1E},
+            {0x1E,0x11,0x11,0x1E,0x11,0x11,0x1E},
+            {0x1F,0x10,0x10,0x10,0x10,0x10,0x10},
+            {0x0E,0x11,0x11,0x11,0x11,0x0A,0x1F},
+            {0x1F,0x10,0x10,0x1E,0x10,0x10,0x1F},
+            {0x11,0x0A,0x04,0x04,0x04,0x0A,0x11},
+            {0x0E,0x11,0x01,0x02,0x01,0x11,0x0E},
+            {0x11,0x11,0x13,0x15,0x19,0x11,0x11},
+            {0x0A,0x11,0x13,0x15,0x19,0x11,0x11},
+            {0x11,0x12,0x14,0x18,0x14,0x12,0x11},
+            {0x03,0x05,0x09,0x09,0x11,0x11,0x11},
+            {0x11,0x1B,0x15,0x15,0x11,0x11,0x11},
+            {0x11,0x11,0x11,0x1F,0x11,0x11,0x11},
+            {0x0E,0x11,0x11,0x11,0x11,0x11,0x0E},
+            {0x1F,0x11,0x11,0x11,0x11,0x11,0x11},
+            // Р  С  Т  У  Ф  Х  Ц  Ч  Ш  Щ  Ъ  Ы  Ь  Э  Ю  Я
+            {0x1E,0x11,0x11,0x1E,0x10,0x10,0x10},
+            {0x0E,0x11,0x10,0x10,0x10,0x11,0x0E},
+            {0x1F,0x04,0x04,0x04,0x04,0x04,0x04},
+            {0x11,0x11,0x0A,0x04,0x04,0x04,0x04},
+            {0x04,0x0E,0x15,0x15,0x15,0x0E,0x04},
+            {0x11,0x11,0x0A,0x04,0x0A,0x11,0x11},
+            {0x11,0x11,0x11,0x11,0x11,0x12,0x1F},
+            {0x11,0x11,0x11,0x0F,0x01,0x01,0x01},
+            {0x15,0x15,0x15,0x15,0x15,0x15,0x1F},
+            {0x15,0x15,0x15,0x15,0x15,0x14,0x1F},
+            {0x1E,0x02,0x02,0x02,0x0E,0x09,0x0E},
+            {0x11,0x11,0x11,0x1F,0x11,0x11,0x0E},
+            {0x01,0x01,0x01,0x0F,0x11,0x11,0x0E},
+            {0x0E,0x11,0x01,0x0F,0x01,0x11,0x0E},
+            {0x1E,0x19,0x19,0x19,0x19,0x19,0x1E},
+            {0x0F,0x11,0x11,0x0F,0x05,0x09,0x11},
+        };
+        System.arraycopy(cyr, 0, f, CYR_INDEX, cyr.length);
+        System.arraycopy(cyr, 0, f, CYR_LOWER_INDEX, cyr.length);
         return f;
     }
 }
