@@ -346,9 +346,9 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
             String display = f.value();
             if (focused) display += "_"; // block cursor
             renderer.text(fX + 10, y + (fh - 8) / 2, display, 1, 0.92f, 0.92f, 0.95f);
-            if (renderer.mouseClicked(0)
-                    && renderer.mouseX() >= fX && renderer.mouseX() <= fX + fw
-                    && renderer.mouseY() >= y && renderer.mouseY() <= y + fh) {
+            if (renderer.mouseX() >= fX && renderer.mouseX() <= fX + fw
+                    && renderer.mouseY() >= y && renderer.mouseY() <= y + fh
+                    && renderer.mouseClicked(0)) {
                 focusedField = i;
             }
         }
@@ -431,9 +431,10 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
             double tw = renderer.textWidth(keyTxt, 1);
             renderer.text(fX + fw - tw - 12, y + (fh - 8) / 2, keyTxt, 1,
                     active ? 0.95f : 0.6f, active ? 0.75f : 0.8f, active ? 0.4f : 0.55f);
-            if (!active && renderer.mouseClicked(0)
+            if (!active
                     && renderer.mouseX() >= fX && renderer.mouseX() <= fX + fw
-                    && renderer.mouseY() >= y && renderer.mouseY() <= y + fh) {
+                    && renderer.mouseY() >= y && renderer.mouseY() <= y + fh
+                    && renderer.mouseClicked(0)) {
                 rebindRow = i;
             }
         }
@@ -631,9 +632,12 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
     private record UiWidget(String type, double x, double y, double w, double h,
                             double value, double max, int ref, int size, float[] color, float[] back, float[] bg) {
         static UiWidget of(Map<String, Object> m) {
+            float[] fill = col(m, "color");
+            if (fill == null) fill = col(m, "fill"); // bars from the Lua layout use "fill"
             return new UiWidget(str(m, "type"), num(m, "x", 0), num(m, "y", 0), num(m, "w", 0), num(m, "h", 0),
-                    num(m, "value", 0), num(m, "max", 1), (int) num(m, "ref", -1), (int) num(m, "size", 12),
-                    col(m, "color"), col(m, "back"), col(m, "bg"));
+                    num(m, "value", 0), num(m, "max", 1), (int) num(m, "ref", -1),
+                    Math.max(1, (int) Math.ceil(num(m, "size", 12) / 8.0)), // 5×7 font ≈ 8px per scale
+                    fill, col(m, "back"), col(m, "bg"));
         }
         private static double num(Map<String, Object> m, String k, double dflt) {
             Object v = m.get(k);

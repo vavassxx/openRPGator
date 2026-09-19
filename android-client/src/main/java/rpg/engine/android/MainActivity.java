@@ -12,6 +12,9 @@ import java.util.*;
 import java.io.File;
 import java.nio.file.Path;
 import rpg.engine.android.controls.*;
+import rpg.engine.map.RMap;
+import rpg.engine.map.RMapIO;
+import rpg.engine.map.TileLayer;
 import rpg.engine.network.Input;
 import rpg.engine.network.Snapshot;
 import rpg.engine.network.Welcome;
@@ -212,6 +215,7 @@ public final class MainActivity extends Activity implements ClientSession.Listen
         // ── Game stage ──
         FrameLayout stage = new FrameLayout(this);
         game = new GameView(this);
+        loadHostMap();
         stage.addView(game, new FrameLayout.LayoutParams(-1, -1));
         overlay = new ControlOverlay(this, controls, (a, pressed) -> onAction(a, pressed));
         overlay.setZoomListener(f -> game.setZoom(f));
@@ -549,6 +553,21 @@ public final class MainActivity extends Activity implements ClientSession.Listen
     }
     private int dp(int n) { return (int)(n * getResources().getDisplayMetrics().density + .5f); }
 
+    /** Loads the first *.rmap from the host folder so the floor matches the served map. */
+    private void loadHostMap() {
+        try {
+            java.io.File[] maps = appStorage.hostDir().listFiles((d, n) -> n.endsWith(".rmap"));
+            if (maps != null && maps.length > 0) {
+                java.util.Arrays.sort(maps, (a, b) -> a.getName().compareToIgnoreCase(b.getName()));
+                try (java.io.InputStream in = new java.io.FileInputStream(maps[0])) {
+                    game.setMap(RMapIO.read(in));
+                }
+            }
+        } catch (Exception e) {
+            logger.error("Host map load failed", e);
+        }
+    }
+
     /** The connection button doubles as disconnect while connected. */
     private void updateConnectUi() {
         if (connectButton != null) connectButton.setText(connected ? "Disconnect" : "Connect");
@@ -694,10 +713,27 @@ public final class MainActivity extends Activity implements ClientSession.Listen
         private static final long TOAST_DURATION_MS = 4000;
         private final List<ToastRecord> toasts = new ArrayList<>();
         private record ToastRecord(String text, long at) {}
+        /** Real map ground layer (from the host folder's *.rmap); null → procedural floor. */
+        private volatile int[] mapTiles;
+        private volatile int mapW, mapH;
+        private volatile boolean hasMap;
         GameView(Context c) {
             super(c);
             p.setTypeface(Typeface.create("sans", Typeface.NORMAL));
             reloadAssets();
+        }
+        void setMap(RMap map) {
+            if (map == null || map.layers().isEmpty()) {
+                hasMap = false;
+                invalidate();
+                return;
+            }
+            TileLayer ground = map.layers().get(0);
+            mapW = ground.width();
+            mapH = ground.height();
+            mapTiles = ground.tiles();
+            hasMap = true;
+            invalidate();
         }
         void setZoom(float factor) {
             zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoom * factor));
@@ -727,9 +763,18 @@ public final class MainActivity extends Activity implements ClientSession.Listen
             float tile = 48 * zoom, ox = getWidth() / 2f, oy = getHeight() / 3f;
             p.setStyle(Paint.Style.FILL);
             int tileCount = atlas.tileCount();
-            for (int y = -8; y < 16; y++) for (int x = -12; x < 14; x++) {
-                float sx = ox + (x - y) * tile * .5f, sy = oy + (x + y) * tile * .25f;
-                drawTile(c, sx, sy, tile, floorTileId(x, y, tileCount));
+            if (hasMap) {
+                // Real floor from the host map — tiles line up exactly with snapshot entities.
+                for (int y = 0; y < mapH; y++) for (int x = 0; x < mapW; x++) {
+                    float sx = ox + (x - y) * tile * .5f, sy = oy + (x + y) * tile * .25f;
+                    int id = mapTiles[y * mapW + x];
+                    drawTile(c, sx, sy, tile, (id >= 0 && id < tileCount) ? id : -1);
+                }
+            } else {
+                for (int y = -8; y < 16; y++) for (int x = -12; x < 14; x++) {
+                    float sx = ox + (x - y) * tile * .5f, sy = oy + (x + y) * tile * .25f;
+                    drawTile(c, sx, sy, tile, floorTileId(x, y, tileCount));
+                }
             }
             for (Snapshot.EntityState e : snapshot.entities()) {
                 float sx = ox + (float)(e.x() - e.y()) * tile * .5f;
