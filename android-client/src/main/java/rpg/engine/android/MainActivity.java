@@ -32,6 +32,9 @@ public final class MainActivity extends Activity implements ClientSession.Listen
     private AppLogger logger;
     private AlertDialog currentDialog;
     private static final int PICK_STORAGE = 9001;
+    /** Connect/Disconnect toggle button on the game screen; label follows {@link #connected}. */
+    private Button connectButton;
+    private volatile boolean connected;
 
     /** Re-sends movement while a move button is held (≈ server tick rate / 2 at 20 Hz). */
     private static final long MOVE_INTERVAL_MS = 50;
@@ -186,7 +189,8 @@ public final class MainActivity extends Activity implements ClientSession.Listen
         actions.setGravity(Gravity.CENTER);
         actions.setPadding(dp(8), dp(4), dp(8), dp(4));
 
-        Button connect = actionButton("Connect", "Connect to server");
+        Button connect = actionButton("Connect", "Connect / disconnect");
+        connectButton = connect;
         Button local = actionButton("Local server", "Start/stop local server");
         Button editControls = actionButton("Edit controls", "Customize touch controls");
         Button menu = actionButton("Menu", "Back to main menu");
@@ -210,6 +214,7 @@ public final class MainActivity extends Activity implements ClientSession.Listen
         game = new GameView(this);
         stage.addView(game, new FrameLayout.LayoutParams(-1, -1));
         overlay = new ControlOverlay(this, controls, (a, pressed) -> onAction(a, pressed));
+        overlay.setZoomListener(f -> game.setZoom(f));
         stage.addView(overlay, new FrameLayout.LayoutParams(-1, -1));
         root.addView(stage, new FrameLayout.LayoutParams(-1, -1));
 
@@ -241,6 +246,14 @@ public final class MainActivity extends Activity implements ClientSession.Listen
 
         // ── Listeners ──
         connect.setOnClickListener(v -> {
+            if (connected) {
+                session.disconnect();
+                gameHandler.removeCallbacks(movePump);
+                connected = false;
+                updateConnectUi();
+                status.setText("Disconnected");
+                return;
+            }
             String h = host.getText().toString().trim();
             String p = port.getText().toString().trim();
             String n = name.getText().toString().trim();
@@ -268,6 +281,7 @@ public final class MainActivity extends Activity implements ClientSession.Listen
             } catch (Exception e) { status.setText("Local server failed: " + e.getMessage()); }
         });
         menu.setOnClickListener(v -> {
+            connected = false;
             session.disconnect();
             if (localServer.isRunning()) localServer.stop();
             showMainMenu();
@@ -535,6 +549,11 @@ public final class MainActivity extends Activity implements ClientSession.Listen
     }
     private int dp(int n) { return (int)(n * getResources().getDisplayMetrics().density + .5f); }
 
+    /** The connection button doubles as disconnect while connected. */
+    private void updateConnectUi() {
+        if (connectButton != null) connectButton.setText(connected ? "Disconnect" : "Connect");
+    }
+
     private void onAction(ControlAction a, boolean pressed) {
         if (pressed) held.add(a); else held.remove(a);
         if (a == ControlAction.INTERACT) {
@@ -569,9 +588,16 @@ public final class MainActivity extends Activity implements ClientSession.Listen
         session.input(dx, dy, actionBits);
     }
 
-    @Override public void connected(Welcome w) { runOnUiThread(() -> status.setText("Connected #" + w.entityId())); }
+    @Override public void connected(Welcome w) {
+        runOnUiThread(() -> { connected = true; updateConnectUi(); status.setText("Connected #" + w.entityId()); });
+    }
     @Override public void snapshot(Snapshot s) { runOnUiThread(() -> game.setSnapshot(s)); }
-    @Override public void status(String s) { runOnUiThread(() -> status.setText(s)); }
+    @Override public void status(String s) {
+        runOnUiThread(() -> {
+            if (s.startsWith("Disconnected")) { connected = false; updateConnectUi(); }
+            status.setText(s);
+        });
+    }
     @Override public void pakLoaded(String name) {
         logAsset(name);
         runOnUiThread(() -> { if (game != null) game.reloadAssets(); });
@@ -580,7 +606,8 @@ public final class MainActivity extends Activity implements ClientSession.Listen
     @Override public void ui(UiLayout u) {
         runOnUiThread(() -> {
             if (UiLayout.KIND_NOTIFY.equals(u.kind())) {
-                Toast.makeText(this, u.bodyText(), Toast.LENGTH_LONG).show();
+                // Rendered in the in-game toast area (like the desktop overlay), not a system toast.
+                game.addToast(u.bodyText());
             } else if (UiLayout.KIND_DIALOG.equals(u.kind())) {
                 logger.info("Dialog id=" + u.dialogId() + " choices=" + u.choiceTexts());
                 showDialog(u);
@@ -660,10 +687,26 @@ public final class MainActivity extends Activity implements ClientSession.Listen
         /** Host-driven widget overlay (UiLayout kind "layout"); rendered blindly. */
         private volatile List<Map<String, Object>> layoutWidgets = List.of();
         private volatile List<String> layoutStrings = List.of();
+        /** Camera zoom (pinch gesture); 1 = map fits, <1 more landscape, >1 closer. */
+        private float zoom = 1f;
+        private static final float MIN_ZOOM = 0.5f, MAX_ZOOM = 4f;
+        /** Notification list rendered as an in-game toast area (like the desktop overlay). */
+        private static final long TOAST_DURATION_MS = 4000;
+        private final List<ToastRecord> toasts = new ArrayList<>();
+        private record ToastRecord(String text, long at) {}
         GameView(Context c) {
             super(c);
             p.setTypeface(Typeface.create("sans", Typeface.NORMAL));
             reloadAssets();
+        }
+        void setZoom(float factor) {
+            zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoom * factor));
+            invalidate();
+        }
+        void addToast(String text) {
+            toasts.add(new ToastRecord(text, System.currentTimeMillis()));
+            if (toasts.size() > 5) toasts.remove(0);
+            invalidate();
         }
         void setLayout(UiLayout u) {
             layoutWidgets = u.layoutWidgets();
@@ -681,14 +724,13 @@ public final class MainActivity extends Activity implements ClientSession.Listen
         void setSnapshot(Snapshot s) { snapshot = s; invalidate(); }
         @Override protected void onDraw(Canvas c) {
             c.drawColor(Color.rgb(36, 48, 42));
-            float tile = 48, ox = getWidth() / 2f, oy = getHeight() / 3f;
+            float tile = 48 * zoom, ox = getWidth() / 2f, oy = getHeight() / 3f;
             p.setStyle(Paint.Style.FILL);
             int tileCount = atlas.tileCount();
             for (int y = -8; y < 16; y++) for (int x = -12; x < 14; x++) {
                 float sx = ox + (x - y) * tile * .5f, sy = oy + (x + y) * tile * .25f;
                 drawTile(c, sx, sy, tile, tileCount > 0 ? (x + y) % tileCount : -1);
             }
-            p.setTextSize(28); p.setColor(Color.WHITE); c.drawText("openRPGator", 20, 34, p);
             for (Snapshot.EntityState e : snapshot.entities()) {
                 float sx = ox + (float)(e.x() - e.y()) * tile * .5f;
                 float sy = oy + (float)(e.x() + e.y()) * tile * .25f - (float)e.elevation() * 12;
@@ -705,10 +747,7 @@ public final class MainActivity extends Activity implements ClientSession.Listen
                 p.setColor(Color.BLACK); p.setTextSize(11); c.drawText(Long.toString(e.id()), sx - 7, sy + 4, p);
             }
             drawLayout(c);
-            if (snapshot.entities().isEmpty()) {
-                p.setColor(Color.WHITE); p.setTextSize(18);
-                c.drawText("Connect to a server", 20, 70, p);
-            }
+            drawToasts(c);
         }
         /** Draws one isometric tile from the atlas texture, falling back to a flat color fill. */
         private void drawTile(Canvas c, float sx, float sy, float tile, int id) {
@@ -781,6 +820,33 @@ public final class MainActivity extends Activity implements ClientSession.Listen
             }
         }
 
+        /** Notification area, bottom-right, like the desktop toast overlay: stack, fade after 4 s. */
+        private void drawToasts(Canvas c) {
+            if (toasts.isEmpty()) return;
+            long now = System.currentTimeMillis();
+            toasts.removeIf(t -> now - t.at > TOAST_DURATION_MS);
+            if (toasts.isEmpty()) return;
+            float density = getResources().getDisplayMetrics().density;
+            float y = getHeight() - dp(8);
+            for (int i = toasts.size() - 1; i >= 0; i--) {
+                ToastRecord t = toasts.get(i);
+                long age = now - t.at;
+                float alpha = Math.min(1f, (TOAST_DURATION_MS - age) / 1000f);
+                p.setTextSize(13 * density);
+                float tw = p.measureText(t.text);
+                float th = p.descent() - p.ascent();
+                float w = tw + dp(16);
+                float left = getWidth() - w - dp(8), top = y - th - dp(4) + p.ascent();
+                p.setStyle(Paint.Style.FILL);
+                p.setColor(argb(0.10f, 0.12f, 0.18f, alpha * 0.92f));
+                c.drawRoundRect(left, top, left + w, y, dp(4), dp(4), p);
+                p.setColor(argb(0.90f, 0.90f, 0.55f, alpha));
+                c.drawText(t.text, left + dp(8), y - dp(4), p);
+                y -= th - p.ascent() + dp(6);
+            }
+            postInvalidateDelayed(150);
+        }
+
         private static String str(Map<String, Object> m, String key, String dflt) {
             Object v = m.get(key);
             return v instanceof String s ? s : dflt;
@@ -803,6 +869,12 @@ public final class MainActivity extends Activity implements ClientSession.Listen
                     Math.round(Math.max(0, Math.min(1, c[0])) * 255),
                     Math.round(Math.max(0, Math.min(1, c[1])) * 255),
                     Math.round(Math.max(0, Math.min(1, c[2])) * 255));
+        }
+        private static int argb(float r, float g, float b, float a) {
+            return Color.argb(Math.round(Math.max(0, Math.min(1, a)) * 255),
+                    Math.round(Math.max(0, Math.min(1, r)) * 255),
+                    Math.round(Math.max(0, Math.min(1, g)) * 255),
+                    Math.round(Math.max(0, Math.min(1, b)) * 255));
         }
     }
 }
