@@ -50,6 +50,18 @@ class ProtocolTest {
         assertEquals(UiLayout.KIND_NOTIFY, notifyRt.kind());
         assertEquals("Тост", notifyRt.bodyText());
         assertTrue(notifyRt.choiceTexts().isEmpty());
+
+        // Host-driven widget surface round-trips the layout JSON + strings verbatim.
+        UiLayout widgetLayout = UiLayout.layout(
+                "[{\"type\":\"bar\",\"x\":0.01,\"y\":0.1,\"w\":0.16,\"h\":0.03,"
+                        + "\"value\":95,\"max\":100},{\"type\":\"text\",\"x\":0.19,\"ref\":1}]",
+                List.of("Здоровье", "HP 95/100"));
+        UiLayout layoutRt = (UiLayout) roundTrip(widgetLayout);
+        assertEquals(UiLayout.KIND_LAYOUT, layoutRt.kind());
+        assertEquals(widgetLayout.json(), layoutRt.json());
+        assertEquals(List.of("Здоровье", "HP 95/100"), layoutRt.strings());
+        assertEquals(2, layoutRt.layoutWidgets().size());
+        assertEquals("HP 95/100", layoutRt.strings().get(1));
     }
 
     @Test

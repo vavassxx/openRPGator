@@ -17,12 +17,21 @@ import java.util.Map;
  * <pre>
  *   {"kind":"dialog","id":3,"layout":{"body":0,"choices":[1,2]},"strings":["text","A","B"]}
  *   {"kind":"notify","id":-1,"layout":{"body":0},"strings":["toast"]}
+ *   {"kind":"layout","id":-1,"layout":[{...widget...}],"strings":["HP 95/100"]}
  * </pre>
+ *
+ * <p>{@code kind="layout"} is the generic, host-driven widget surface: Lua scripts on the
+ * server build a JSON <em>array</em> of widget descriptors (see {@link #layout(String, List)}
+ * for the widget schema) and ship it together with the {@code strings} the widgets reference
+ * by index. The client is a dumb renderer — it knows the widget schema, never the game
+ * meaning behind it (HP, mana, quests are all just bars/labels assembled by the host).
  */
 public record UiLayout(String kind, long dialogId, String json) implements Packet {
 
     public static final String KIND_NOTIFY = "notify";
     public static final String KIND_DIALOG = "dialog";
+    /** Generic host-driven widget surface (array of widget objects + strings). */
+    public static final String KIND_LAYOUT = "layout";
 
     public byte type() { return 10; }
 
@@ -52,6 +61,32 @@ public record UiLayout(String kind, long dialogId, String json) implements Packe
                 "layout", layout.toString(),
                 "strings", strings.toString());
         return new UiLayout(KIND_DIALOG, dialogId, json);
+    }
+
+    /**
+     * Generic host-driven widget surface.
+     *
+     * <p>{@code layoutJson} is a JSON <em>array</em> of widget descriptors; text widgets refer
+     * to entries of {@code strings} by index ({@code "ref"}). Position/size fields are
+     * fractions of the viewport (0..1); colors are RGB(A) arrays with components 0..1:
+     * <pre>
+     *   {"type":"panel","x":..,"y":..,"w":..,"h":..,"bg":[r,g,b,a]}
+     *   {"type":"bar","x":..,"y":..,"w":..,"h":..,"value":n,"max":m,"fill":[r,g,b],"back":[r,g,b]}
+     *   {"type":"text","x":..,"y":..,"ref":idx,"size":dp,"color":[r,g,b]}
+     * </pre>
+     */
+    public static UiLayout layout(String layoutJson, List<String> strings) {
+        StringBuilder sb = new StringBuilder("[");
+        for (int i = 0; i < strings.size(); i++) {
+            if (i > 0) sb.append(',');
+            sb.append(Json.string(strings.get(i)));
+        }
+        String json = Json.object(
+                "kind", Json.string(KIND_LAYOUT),
+                "id", Json.number(-1),
+                "layout", layoutJson,
+                "strings", sb.append(']').toString());
+        return new UiLayout(KIND_LAYOUT, -1, json);
     }
 
     /** Parsed document (see class javadoc for shape). */
@@ -108,5 +143,22 @@ public record UiLayout(String kind, long dialogId, String json) implements Packe
             if (idx >= 0 && idx < strings.size()) out.add(strings.get(idx));
         }
         return out;
+    }
+
+    /**
+     * Widget descriptors of a {@link #KIND_LAYOUT} document (empty otherwise). Each entry is a
+     * {@code Map} with {@code type}, geometry and value fields per the layout schema.
+     */
+    @SuppressWarnings("unchecked")
+    public List<Map<String, Object>> layoutWidgets() {
+        Object layout = object().get("layout");
+        if (layout instanceof List) {
+            List<Map<String, Object>> out = new ArrayList<>();
+            for (Object o : (List<Object>) layout) {
+                if (o instanceof Map) out.add((Map<String, Object>) o);
+            }
+            return out;
+        }
+        return List.of();
     }
 }

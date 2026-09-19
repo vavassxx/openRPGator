@@ -20,6 +20,13 @@ public interface UiSink {
     /** Opens a modal dialog for the player. The answer arrives via {@link DialogCallback}. */
     void dialogTo(long playerEntityId, long dialogId, String text, List<String> choices, DialogCallback callback);
 
+    /**
+     * Pushes a host-driven widget layout (see {@code UiLayout.layout(String, List)}) to a single
+     * player. The layout is a plain JSON widget array plus its strings — the client renders it
+     * blindly, it never knows the game meaning. No-op by default.
+     */
+    default void layoutTo(long playerEntityId, String layoutJson, List<String> strings) { }
+
     /** Called by the network layer when a player disconnects, to discard pending dialogs. */
     void clearDialogs(long playerEntityId);
 

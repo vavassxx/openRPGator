@@ -33,6 +33,16 @@ public final class MainActivity extends Activity implements ClientSession.Listen
     private AlertDialog currentDialog;
     private static final int PICK_STORAGE = 9001;
 
+    /** Re-sends movement while a move button is held (≈ server tick rate / 2 at 20 Hz). */
+    private static final long MOVE_INTERVAL_MS = 50;
+    private final Handler gameHandler = new Handler(Looper.getMainLooper());
+    private final Runnable movePump = new Runnable() {
+        @Override public void run() {
+            sendMovement();
+            if (anyMoveHeld()) gameHandler.postDelayed(this, MOVE_INTERVAL_MS);
+        }
+    };
+
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
         controls = ControlLayout.load(this);
@@ -111,9 +121,35 @@ public final class MainActivity extends Activity implements ClientSession.Listen
     // ── Game screen ─────────────────────────────────────────────────
     private void showGame() {
         applyImmersive();
-        LinearLayout root = new LinearLayout(this);
-        root.setOrientation(LinearLayout.VERTICAL);
+        FrameLayout root = new FrameLayout(this);
         root.setBackgroundColor(Color.rgb(18, 19, 22));
+
+        // ── Collapsible server panel (floating overlay; never shrinks the stage) ──
+        LinearLayout panel = new LinearLayout(this);
+        panel.setOrientation(LinearLayout.VERTICAL);
+        panel.setElevation(dp(8));
+        panel.setBackgroundColor(Color.argb(235, 18, 19, 22));
+
+        LinearLayout headerRow = new LinearLayout(this);
+        headerRow.setOrientation(LinearLayout.HORIZONTAL);
+        headerRow.setGravity(Gravity.CENTER_VERTICAL);
+        headerRow.setPadding(dp(4), dp(2), dp(8), dp(2));
+        Button toggle = new Button(this);
+        toggle.setText("▲ Панель");
+        toggle.setTextSize(11);
+        toggle.setAllCaps(false);
+        TextView panelTitle = new TextView(this);
+        panelTitle.setText("openRPGator — server & controls");
+        panelTitle.setTextColor(Color.rgb(205, 205, 210));
+        panelTitle.setTextSize(12);
+        headerRow.addView(toggle, new LinearLayout.LayoutParams(dp(116), dp(34)));
+        headerRow.addView(panelTitle, new LinearLayout.LayoutParams(0, dp(34), 1));
+        panel.addView(headerRow, new LinearLayout.LayoutParams(-1, -2));
+
+        // Collapsible body (hidden by default → fullscreen game on start)
+        LinearLayout body = new LinearLayout(this);
+        body.setOrientation(LinearLayout.VERTICAL);
+        body.setVisibility(View.GONE);
 
         // ── Top bar: connection ──
         LinearLayout bar = new LinearLayout(this);
@@ -128,7 +164,7 @@ public final class MainActivity extends Activity implements ClientSession.Listen
         bar.addView(host, new LinearLayout.LayoutParams(0, dp(48), 3));
         bar.addView(port, new LinearLayout.LayoutParams(0, dp(48), 2));
         bar.addView(name, new LinearLayout.LayoutParams(0, dp(48), 2));
-        root.addView(bar, new LinearLayout.LayoutParams(-1, dp(56)));
+        body.addView(bar, new LinearLayout.LayoutParams(-1, dp(56)));
 
         // ── Local server row (auto host folder) ──
         LinearLayout localRow = new LinearLayout(this);
@@ -142,7 +178,7 @@ public final class MainActivity extends Activity implements ClientSession.Listen
         hostInfo.setText("Host (data/host): " + (maps.length == 0 ? "no map yet" : String.join(", ", maps)));
         hostInfo.setPadding(dp(8), 0, 0, 0);
         localRow.addView(hostInfo, new LinearLayout.LayoutParams(-1, dp(48)));
-        root.addView(localRow, new LinearLayout.LayoutParams(-1, dp(56)));
+        body.addView(localRow, new LinearLayout.LayoutParams(-1, dp(56)));
 
         // ── Action buttons row ──
         LinearLayout actions = new LinearLayout(this);
@@ -159,7 +195,7 @@ public final class MainActivity extends Activity implements ClientSession.Listen
         actions.addView(local, new LinearLayout.LayoutParams(0, dp(52), 1));
         actions.addView(editControls, new LinearLayout.LayoutParams(0, dp(52), 1));
         actions.addView(menu, new LinearLayout.LayoutParams(0, dp(52), 1));
-        root.addView(actions, new LinearLayout.LayoutParams(-1, dp(60)));
+        body.addView(actions, new LinearLayout.LayoutParams(-1, dp(60)));
 
         // ── Status ──
         status = new TextView(this);
@@ -167,7 +203,7 @@ public final class MainActivity extends Activity implements ClientSession.Listen
         status.setText("Offline");
         status.setTextSize(13);
         status.setPadding(dp(12), dp(4), dp(12), dp(4));
-        root.addView(status, new LinearLayout.LayoutParams(-1, dp(36)));
+        body.addView(status, new LinearLayout.LayoutParams(-1, dp(36)));
 
         // ── Game stage ──
         FrameLayout stage = new FrameLayout(this);
@@ -175,7 +211,7 @@ public final class MainActivity extends Activity implements ClientSession.Listen
         stage.addView(game, new FrameLayout.LayoutParams(-1, -1));
         overlay = new ControlOverlay(this, controls, (a, pressed) -> onAction(a, pressed));
         stage.addView(overlay, new FrameLayout.LayoutParams(-1, -1));
-        root.addView(stage, new LinearLayout.LayoutParams(-1, 0, 1));
+        root.addView(stage, new FrameLayout.LayoutParams(-1, -1));
 
         // ── Controls edit bar (hidden by default) ──
         LinearLayout editbar = new LinearLayout(this);
@@ -201,7 +237,7 @@ public final class MainActivity extends Activity implements ClientSession.Listen
         editbar.addView(larger, new LinearLayout.LayoutParams(0, dp(48), 1));
         editbar.addView(add, new LinearLayout.LayoutParams(0, dp(48), 1));
         editbar.addView(remove, new LinearLayout.LayoutParams(0, dp(48), 1));
-        root.addView(editbar, new LinearLayout.LayoutParams(-1, dp(56)));
+        body.addView(editbar, new LinearLayout.LayoutParams(-1, dp(56)));
 
         // ── Listeners ──
         connect.setOnClickListener(v -> {
@@ -261,6 +297,15 @@ public final class MainActivity extends Activity implements ClientSession.Listen
             status.setText("New button: drag to position");
         });
         remove.setOnClickListener(v -> { if (overlay.selected() != null) { controls.remove(overlay.selected()); overlay.invalidate(); status.setText("Button removed"); } });
+
+        panel.addView(body, new LinearLayout.LayoutParams(-1, -2));
+        root.addView(panel, new FrameLayout.LayoutParams(-1, -2, Gravity.TOP));
+        toggle.setOnClickListener(v -> {
+            boolean show = body.getVisibility() != View.VISIBLE;
+            body.setVisibility(show ? View.VISIBLE : View.GONE);
+            toggle.setText(show ? "▼ Панель" : "▲ Панель");
+            status.setText(show ? "Server panel open" : "Server panel collapsed — game screen is full");
+        });
 
         setContentView(root);
     }
@@ -492,16 +537,35 @@ public final class MainActivity extends Activity implements ClientSession.Listen
 
     private void onAction(ControlAction a, boolean pressed) {
         if (pressed) held.add(a); else held.remove(a);
+        if (a == ControlAction.INTERACT) {
+            // Edge-triggered: one interaction per press — never repeated by the hold pump.
+            if (pressed) session.input(0, 0, Input.INTERACT);
+            return;
+        }
         actionBits = 0;
         if (held.contains(ControlAction.PRIMARY)) actionBits |= Input.PRIMARY;
         if (held.contains(ControlAction.SECONDARY)) actionBits |= Input.SECONDARY;
-        if (held.contains(ControlAction.INTERACT)) actionBits |= Input.INTERACT;
         if (held.contains(ControlAction.INVENTORY)) actionBits |= Input.INVENTORY;
         sendMovement();
+        gameHandler.removeCallbacks(movePump);
+        if (anyMoveHeld()) gameHandler.postDelayed(movePump, MOVE_INTERVAL_MS);
     }
+    private boolean anyMoveHeld() {
+        return held.contains(ControlAction.MOVE_UP) || held.contains(ControlAction.MOVE_DOWN)
+                || held.contains(ControlAction.MOVE_LEFT) || held.contains(ControlAction.MOVE_RIGHT);
+    }
+    /**
+     * Screen-relative → world axes, same isometric conversion as the desktop client
+     * (screen right = world (+1,-1), screen down = world (+1,+1)). Holding a button keeps
+     * re-sending via {@link #movePump} until the last move button is released (a zero vector
+     * is then sent to stop).
+     */
     private void sendMovement() {
-        double dx = (held.contains(ControlAction.MOVE_RIGHT) ? 1 : 0) - (held.contains(ControlAction.MOVE_LEFT) ? 1 : 0);
-        double dy = (held.contains(ControlAction.MOVE_DOWN) ? 1 : 0) - (held.contains(ControlAction.MOVE_UP) ? 1 : 0);
+        double sx = (held.contains(ControlAction.MOVE_RIGHT) ? 1 : 0) - (held.contains(ControlAction.MOVE_LEFT) ? 1 : 0);
+        double sy = (held.contains(ControlAction.MOVE_DOWN) ? 1 : 0) - (held.contains(ControlAction.MOVE_UP) ? 1 : 0);
+        double dx = sx + sy, dy = sy - sx;
+        double len = Math.sqrt(dx * dx + dy * dy);
+        if (len > 1.0) { dx /= len; dy /= len; }
         session.input(dx, dy, actionBits);
     }
 
@@ -520,6 +584,9 @@ public final class MainActivity extends Activity implements ClientSession.Listen
             } else if (UiLayout.KIND_DIALOG.equals(u.kind())) {
                 logger.info("Dialog id=" + u.dialogId() + " choices=" + u.choiceTexts());
                 showDialog(u);
+            } else if (UiLayout.KIND_LAYOUT.equals(u.kind())) {
+                // Host-driven widget surface — forwarded to the blind renderer in GameView.
+                game.setLayout(u);
             }
         });
     }
@@ -590,10 +657,18 @@ public final class MainActivity extends Activity implements ClientSession.Listen
         private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final android.graphics.Path diamond = new android.graphics.Path();
         private final PakAtlas atlas = new PakAtlas();
+        /** Host-driven widget overlay (UiLayout kind "layout"); rendered blindly. */
+        private volatile List<Map<String, Object>> layoutWidgets = List.of();
+        private volatile List<String> layoutStrings = List.of();
         GameView(Context c) {
             super(c);
             p.setTypeface(Typeface.create("sans", Typeface.NORMAL));
             reloadAssets();
+        }
+        void setLayout(UiLayout u) {
+            layoutWidgets = u.layoutWidgets();
+            layoutStrings = u.strings();
+            invalidate();
         }
         void reloadAssets() {
             try {
@@ -629,6 +704,7 @@ public final class MainActivity extends Activity implements ClientSession.Listen
                 }
                 p.setColor(Color.BLACK); p.setTextSize(11); c.drawText(Long.toString(e.id()), sx - 7, sy + 4, p);
             }
+            drawLayout(c);
             if (snapshot.entities().isEmpty()) {
                 p.setColor(Color.WHITE); p.setTextSize(18);
                 c.drawText("Connect to a server", 20, 70, p);
@@ -655,6 +731,78 @@ public final class MainActivity extends Activity implements ClientSession.Listen
                 p.setColor(Color.rgb(58 + base % 30, 78 + base % 40, 65 + base % 20));
                 c.drawPath(diamond, p);
             }
+        }
+
+        /** Blind renderer for the host-driven widget schema (UiLayout kind "layout"). */
+        private void drawLayout(Canvas c) {
+            if (layoutWidgets.isEmpty()) return;
+            float W = getWidth(), H = getHeight();
+            float density = getResources().getDisplayMetrics().density;
+            for (Map<String, Object> w : layoutWidgets) {
+                String type = str(w, "type", "");
+                float x = num(w, "x", 0) * W, y = num(w, "y", 0) * H;
+                switch (type) {
+                    case "panel" -> {
+                        float[] bg = col(w, "bg");
+                        if (bg != null) {
+                            p.setStyle(Paint.Style.FILL);
+                            p.setColor(argb(bg, bg.length > 3 ? bg[3] : 1f));
+                            c.drawRoundRect(x, y, x + num(w, "w", 0) * W, y + num(w, "h", 0) * H,
+                                    dp(4), dp(4), p);
+                        }
+                    }
+                    case "bar" -> {
+                        float ww = num(w, "w", 0.2f) * W, hh = num(w, "h", 0.04f) * H;
+                        float frac = num(w, "max", 1) > 0
+                                ? Math.max(0, Math.min(1, num(w, "value", 0) / num(w, "max", 1))) : 0;
+                        p.setStyle(Paint.Style.FILL);
+                        p.setColor(0xCC101318);
+                        c.drawRoundRect(x - 2, y - 2, x + ww + 2, y + hh + 2, dp(3), dp(3), p);
+                        float[] back = col(w, "back");
+                        if (back != null) { p.setColor(argb(back, 1f)); c.drawRoundRect(x, y, x + ww, y + hh, dp(3), dp(3), p); }
+                        float[] fill = col(w, "fill");
+                        if (fill != null) {
+                            if (fill.length > 3 && fill[3] < 1) p.setColor(argb(fill, fill[3]));
+                            else p.setColor(argb(fill, 1f));
+                            if (frac > 0) c.drawRoundRect(x, y, x + ww * frac, y + hh, dp(3), dp(3), p);
+                        }
+                    }
+                    case "text" -> {
+                        int ref = (int) num(w, "ref", -1);
+                        String s = ref >= 0 && ref < layoutStrings.size() ? layoutStrings.get(ref) : "";
+                        if (s.isEmpty()) break;
+                        float[] color = col(w, "color");
+                        p.setColor(color != null ? argb(color, 1f) : Color.WHITE);
+                        p.setTextSize(num(w, "size", 12) * density);
+                        c.drawText(s, x, y + p.getTextSize(), p);
+                    }
+                    default -> { }
+                }
+            }
+        }
+
+        private static String str(Map<String, Object> m, String key, String dflt) {
+            Object v = m.get(key);
+            return v instanceof String s ? s : dflt;
+        }
+        private static float num(Map<String, Object> m, String key, float dflt) {
+            Object v = m.get(key);
+            return v instanceof Number n ? n.floatValue() : dflt;
+        }
+        /** Floats 0..1 (r,g,b[,a]) → ARGB int. */
+        private static float[] col(Map<String, Object> m, String key) {
+            Object v = m.get(key);
+            if (!(v instanceof List)) return null;
+            float[] out = new float[((List<?>) v).size()];
+            int i = 0;
+            for (Object o : (List<?>) v) if (o instanceof Number n) out[i++] = n.floatValue();
+            return out;
+        }
+        private static int argb(float[] c, float alpha) {
+            return Color.argb(Math.round(Math.max(0, Math.min(1, alpha)) * 255),
+                    Math.round(Math.max(0, Math.min(1, c[0])) * 255),
+                    Math.round(Math.max(0, Math.min(1, c[1])) * 255),
+                    Math.round(Math.max(0, Math.min(1, c[2])) * 255));
         }
     }
 }

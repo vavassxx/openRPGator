@@ -82,6 +82,9 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
 
     private final List<ToastRecord> toasts = new CopyOnWriteArrayList<>();
     private volatile ActiveDialog activeDialog;
+    /** Host-driven widget overlay (UiLayout kind "layout"); rendered blindly. */
+    private volatile List<UiWidget> hudWidgets = List.of();
+    private volatile List<String> hudStrings = List.of();
 
     private record ToastRecord(String text, long timestamp) {}
     private record ActiveDialog(long dialogId, String text, List<String> choices) {}
@@ -485,11 +488,70 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
         renderer.text(6, 4, title, 1, 0.85f, 0.85f, 0.9f);
         renderer.text(w - renderer.textWidth(statusText, 1) - 6, 4, statusText, 1, 0.5f, 0.8f, 0.5f);
 
+        // ── Host-driven widget overlay (UiLayout kind "layout") ──
+        renderWidgets(w, h);
+
         // ── Toast notifications (bottom-right, stacked) ──────────
         renderToasts(w, h);
 
         // ── Modal dialog overlay ─────────────────────────────────
         if (activeDialog != null) renderDialog(w, h);
+    }
+
+    // ── Host-driven widget overlay ─────────────────────────────────
+    private void renderWidgets(int w, int h) {
+        for (UiWidget wt : hudWidgets) {
+            double px = wt.x() * w, py = wt.y() * h, pw = wt.w() * w, ph = wt.h() * h;
+            switch (wt.type()) {
+                case "panel" -> {
+                    if (wt.bg() != null) renderer.rect(px, py, pw, ph,
+                            wt.bg()[0], wt.bg()[1], wt.bg()[2], wt.bg().length > 3 ? wt.bg()[3] : 1f);
+                }
+                case "bar" -> {
+                    renderer.rect(px - 2, py - 2, pw + 4, ph + 4, 0f, 0f, 0f, 0.55f);
+                    if (wt.back() != null) renderer.rect(px, py, pw, ph,
+                            wt.back()[0], wt.back()[1], wt.back()[2], 1f);
+                    double frac = wt.max() > 0 ? Math.max(0, Math.min(1, wt.value() / wt.max())) : 0;
+                    if (frac > 0 && wt.color() != null) renderer.rect(px, py, pw * frac, ph,
+                            wt.color()[0], wt.color()[1], wt.color()[2], 1f);
+                }
+                case "text" -> {
+                    String s = wt.ref() >= 0 && wt.ref() < hudStrings.size() ? hudStrings.get(wt.ref()) : "";
+                    if (!s.isEmpty()) {
+                        float[] col = wt.color() != null ? wt.color() : new float[]{1, 1, 1};
+                        renderer.text(px, py, s, Math.max(1, wt.size()), col[0], col[1], col[2]);
+                    }
+                }
+                default -> { }
+            }
+        }
+    }
+
+    /** Widget descriptor parsed from the host layout schema (see {@code UiLayout.layout}). */
+    private record UiWidget(String type, double x, double y, double w, double h,
+                            double value, double max, int ref, int size, float[] color, float[] back, float[] bg) {
+        static UiWidget of(Map<String, Object> m) {
+            return new UiWidget(str(m, "type"), num(m, "x", 0), num(m, "y", 0), num(m, "w", 0), num(m, "h", 0),
+                    num(m, "value", 0), num(m, "max", 1), (int) num(m, "ref", -1), (int) num(m, "size", 12),
+                    col(m, "color"), col(m, "back"), col(m, "bg"));
+        }
+        private static double num(Map<String, Object> m, String k, double dflt) {
+            Object v = m.get(k);
+            return v instanceof Number n ? n.doubleValue() : dflt;
+        }
+        private static float[] col(Map<String, Object> m, String k) {
+            Object v = m.get(k);
+            if (!(v instanceof List)) return null;
+            float[] out = new float[((List<?>) v).size()];
+            int i = 0;
+            for (Object o : (List<?>) v) if (o instanceof Number n) out[i++] = n.floatValue();
+            if (out.length < 3) return null;
+            return out.length == 3 ? new float[]{out[0], out[1], out[2], 1f} : out;
+        }
+        private static String str(Map<String, Object> m, String k) {
+            Object v = m.get(k);
+            return v instanceof String s ? s : "";
+        }
     }
 
     // ── Toast rendering ───────────────────────────────────────────
@@ -621,6 +683,10 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
             addToast(u.bodyText());
         } else if (UiLayout.KIND_DIALOG.equals(u.kind())) {
             activeDialog = new ActiveDialog(u.dialogId(), u.bodyText(), u.choiceTexts());
+        } else if (UiLayout.KIND_LAYOUT.equals(u.kind())) {
+            // Host-driven widget surface — render the schema as-is, never infer game meaning.
+            hudStrings = u.strings();
+            hudWidgets = u.layoutWidgets().stream().map(UiWidget::of).toList();
         }
     }
     @Override public void onStatus(String s) {

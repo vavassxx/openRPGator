@@ -45,6 +45,20 @@ public final class LuaApi {
     private final AtomicLong dialogIds = new AtomicLong();
     private final Map<Long, LuaFunction> dialogCallbacks = new ConcurrentHashMap<>();
 
+    /**
+     * Player entity ids as reported by the embedding host (the dedicated/local server knows
+     * which clients are connected). Host-owned: the engine never guesses who is a player.
+     */
+    private volatile Set<EntityId> playerIds = Set.of();
+
+    /** Called by the embedding server each tick before {@link #dispatchTick()}. */
+    public void setPlayers(Collection<Long> ids) {
+        if (ids == null || ids.isEmpty()) { playerIds = Set.of(); return; }
+        Set<EntityId> out = new HashSet<>(ids.size());
+        for (Long id : ids) out.add(new EntityId(id));
+        playerIds = out;
+    }
+
     public void bindWorld(GameWorld world) {
         this.world = world;
         world.events().on(TriggerEnterEvent.class, e -> dispatchEnter(e.entity(), e.trigger()));
@@ -86,6 +100,18 @@ public final class LuaApi {
                 return NONE;
             }
         });
+        engine.set("layout", new ArgsLib() {
+            public LuaValue callImpl(Varargs args) {
+                long targetId = targetIdOf(args.arg(1));
+                LuaValue widgets = args.arg(2);
+                LuaValue strings = args.arg(3);
+                if (uiSink == null || targetId == -1) return NONE;
+                List<String> strs = new ArrayList<>();
+                for (int i = 1; i <= strings.length(); i++) strs.add(strings.get(i).tojstring());
+                uiSink.layoutTo(targetId, toJson(widgets), strs);
+                return NONE;
+            }
+        });
         globals.set("engine", engine);
 
         LuaTable worldApi = new LuaTable();
@@ -96,6 +122,7 @@ public final class LuaApi {
         worldApi.set("get", new OneArgFunction() { public LuaValue call(LuaValue id) { EntityId e = parseId(id.tojstring()); return e == null ? NIL : entityFacade(e); }});
         worldApi.set("find", new OneArgFunction() { public LuaValue call(LuaValue name) { return find(name.tojstring()); }});
         worldApi.set("all", new ZeroArgFunction() { public LuaValue call() { return allEntities(); }});
+        worldApi.set("players", new ZeroArgFunction() { public LuaValue call() { return players(); }});
         worldApi.set("get_near", new ArgsLib() {
             public LuaValue callImpl(Varargs args) {
                 double x = args.arg1().todouble(), y = args.arg(2).todouble(), r = args.narg() >= 3 ? args.arg(3).todouble() : 1.0;
@@ -216,6 +243,17 @@ public final class LuaApi {
         return t;
     }
 
+    /** Facades of the players the embedding host is currently serving (see {@link #setPlayers}). */
+    private LuaTable players() {
+        LuaTable t = new LuaTable();
+        if (world == null) return t;
+        int i = 1;
+        for (EntityId e : playerIds) {
+            if (world.entities().entities().contains(e)) t.set(i++, entityFacade(e));
+        }
+        return t;
+    }
+
     private LuaTable nearEntities(double x, double y, double r) {
         LuaTable t = new LuaTable();
         if (world == null) return t;
@@ -313,6 +351,68 @@ public final class LuaApi {
     private void register(Map<EntityId, List<LuaFunction>> into, EntityId id, LuaValue fn) {
         if (id == null || !fn.isfunction()) return;
         into.computeIfAbsent(id, k -> new ArrayList<>()).add((LuaFunction) fn);
+    }
+
+    /**
+     * Minimal Lua→JSON serializer for {@code engine.layout}: Lua tables with consecutive integer
+     * keys 1..n become JSON arrays (widget order preserved), anything else becomes an object.
+     */
+    private String toJson(LuaValue v) {
+        if (v.isnil()) return "null";
+        if (v.isboolean()) return v.toboolean() ? "true" : "false";
+        if (v.isnumber()) {
+            double d = v.todouble();
+            if (!Double.isInfinite(d) && d == Math.floor(d) && Math.abs(d) < 1e15)
+                return Long.toString((long) d);
+            return Double.toString(d);
+        }
+        if (v.isstring()) return toJsonString(v.tojstring());
+        if (v.istable()) {
+            LuaTable t = v.checktable();
+            int len = t.length();
+            LuaValue[] keys = t.keys();
+            boolean array = keys.length == 0;
+            if (keys.length > 0) {
+                array = true;
+                for (LuaValue k : keys) {
+                    if (!(k.isinttype() && k.toint() >= 1 && k.toint() <= len)) { array = false; break; }
+                }
+            }
+            if (array) {
+                StringBuilder sb = new StringBuilder("[");
+                for (int i = 1; i <= len; i++) {
+                    if (i > 1) sb.append(',');
+                    sb.append(toJson(t.get(i)));
+                }
+                return sb.append(']').toString();
+            }
+            StringBuilder sb = new StringBuilder("{");
+            boolean first = true;
+            for (LuaValue k : keys) {
+                if (!first) sb.append(',');
+                first = false;
+                sb.append(toJsonString(k.tojstring())).append(':').append(toJson(t.get(k)));
+            }
+            return sb.append('}').toString();
+        }
+        return "null";
+    }
+
+    private static String toJsonString(String s) {
+        StringBuilder sb = new StringBuilder(s.length() + 2);
+        sb.append('"');
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            switch (c) {
+                case '"' -> sb.append("\\\"");
+                case '\\' -> sb.append("\\\\");
+                case '\n' -> sb.append("\\n");
+                case '\r' -> sb.append("\\r");
+                case '\t' -> sb.append("\\t");
+                default -> sb.append(c);
+            }
+        }
+        return sb.append('"').toString();
     }
 
     /**

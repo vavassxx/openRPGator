@@ -184,12 +184,14 @@ class LuaApiTest {
         scripts.bindMap(map);
     }
 
-    // ── push UI: engine.notify / engine.dialog ────────────────────
+    // ── push UI: engine.notify / engine.dialog / engine.layout ─────
     private static final class RecordingSink implements UiSink {
         final List<String> broadcasts = new ArrayList<>();
         final List<DialogCall> dialogs = new ArrayList<>();
+        final List<LayoutCall> layouts = new ArrayList<>();
 
         record DialogCall(long dialogId, long playerId, String text, List<String> choices, DialogCallback cb) {}
+        record LayoutCall(long playerId, String layoutJson, List<String> strings) {}
 
         @Override public void broadcastNotify(String text) { broadcasts.add(text); }
         @Override public void notifyTo(long playerEntityId, String text) {}
@@ -197,6 +199,9 @@ class LuaApiTest {
             dialogs.add(new DialogCall(dialogId, playerEntityId, text, choices, callback));
         }
         @Override public void clearDialogs(long playerEntityId) {}
+        @Override public void layoutTo(long playerEntityId, String layoutJson, List<String> strings) {
+            layouts.add(new LayoutCall(playerEntityId, layoutJson, strings));
+        }
     }
 
     @Test
@@ -205,6 +210,38 @@ class LuaApiTest {
         api.setUiSink(sink);
         scripts.execute("engine.notify('hello world')", "notify_test");
         assertEquals(List.of("hello world"), sink.broadcasts);
+    }
+
+    @Test
+    void layoutSendsWidgetSchemaWithStrings() {
+        RecordingSink sink = new RecordingSink();
+        api.setUiSink(sink);
+        EntityId player = world.spawn();
+        world.entities().set(player, new Name("player"));
+        world.entities().set(player, new Transform(new WorldPosition(0, 0, 0), 0));
+        scripts.execute(
+                "engine.layout(world.get('player'), " +
+                        "{{ type='bar', x=0.01, y=0.1, w=0.16, h=0.03, value=95, max=100 }," +
+                        " { type='text', x=0.19, y=0.1, ref=1, color={1,1,1} }}, " +
+                        "{'Здоровье', 'HP 95/100'})",
+                "layout_test");
+        assertEquals(1, sink.layouts.size());
+        var l = sink.layouts.get(0);
+        assertEquals(player.value(), l.playerId());
+        assertEquals(List.of("Здоровье", "HP 95/100"), l.strings());
+        assertTrue(l.layoutJson().contains("\"value\":95"), l.layoutJson());
+        assertTrue(l.layoutJson().contains("\"max\":100"), l.layoutJson());
+        assertTrue(l.layoutJson().contains("\"ref\":1"), l.layoutJson());
+    }
+
+    @Test
+    void playersAreHostProvided() {
+        EntityId p1 = world.spawn();
+        EntityId p2 = world.spawn();
+        EntityId bystander = world.spawn();
+        api.setPlayers(List.of(p1.value(), p2.value()));
+        LuaValue n = globals.load("return #world.players()", "players_count").call();
+        assertEquals(2, n.toint());
     }
 
     @Test

@@ -26,6 +26,9 @@ public final class GameRuntime {
 
     public void setUiSink(UiSink sink) { scripts.api().setUiSink(sink); }
 
+    /** Host-owned: tells the script layer which entity ids are live players this tick. */
+    public void setPlayers(java.util.Collection<Long> playerIds) { scripts.api().setPlayers(playerIds); }
+
     /** Thread-safe: queues a dialog response to be delivered on the next tick. */
     public void respondDialog(long dialogId, int choice) {
         pendingActions.add(() -> scripts.api().respondDialog(dialogId, choice));

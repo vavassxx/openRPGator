@@ -102,6 +102,9 @@ public final class ServerHost {
         tick.scheduleAtFixedRate(() -> {
             try {
                 synchronized (worldLock) {
+                    // Host-owned knowledge (who is connected) is handed to the script layer each
+                    // tick; Lua decides what to do with it (HP, HUD, quests — all script-side).
+                    runtime.setPlayers(clients.keySet());
                     runtime.tick();
                     // Entities move on their own (rat patrol, sky timer, Lua on_tick), not only
                     // in response to player input — broadcast the world every tick so clients
@@ -241,6 +244,10 @@ public final class ServerHost {
                 if (c != null) c.send(UiLayout.dialog(dialogId, text, choices));
             }
             @Override public void clearDialogs(long playerEntityId) { }
+            @Override public void layoutTo(long playerEntityId, String layoutJson, List<String> strings) {
+                Client c = clients.get(playerEntityId);
+                if (c != null) c.send(UiLayout.layout(layoutJson, strings));
+            }
         };
     }
 
