@@ -19,6 +19,9 @@ import java.util.List;
  *   8  PakList(packs[])
  *   9  PakChunk(name, offset, data)
  *   10 UiLayout(kind, dialogId, json) — layout + strings UI document
+ *   11 Script(name, source) — client-side Lua UI script pushed by the host
+ *   12 Cmd(code, arg) — custom command (client ↔ server; value chosen by the host)
+ *   14 MapPacket(width, height, tiles) — authoritative ground layer pushed after Welcome
  */
 public final class Protocol {
     private static final int MAX_FRAME_SIZE = 1 << 20;
@@ -67,6 +70,17 @@ public final class Protocol {
             writeString(data, p.kind());
             data.writeLong(p.dialogId());
             writeString(data, p.json());
+        } else if (packet instanceof Script p) {
+            writeString(data, p.name());
+            writeString(data, p.source());
+        } else if (packet instanceof Cmd p) {
+            data.writeInt(p.code());
+            writeString(data, p.arg());
+        } else if (packet instanceof MapPacket p) {
+            data.writeInt(p.width());
+            data.writeInt(p.height());
+            data.writeInt(p.tiles().length);
+            for (int t : p.tiles()) data.writeInt(t);
         } else {
             throw new IOException("Unsupported packet: " + packet.getClass());
         }
@@ -94,6 +108,9 @@ public final class Protocol {
             case 8 -> { return readPakList(data); }
             case 9 -> { return readPakChunk(data); }
             case 10 -> { return new UiLayout(readString(data), data.readLong(), readString(data)); }
+            case 11 -> { return new Script(readString(data), readString(data)); }
+            case 12 -> { return new Cmd(data.readInt(), readString(data)); }
+            case 14 -> { return readMap(data); }
             default -> throw new IOException("Unknown packet type");
         }
     }
@@ -124,6 +141,15 @@ public final class Protocol {
         byte[] data = new byte[len];
         in.readFully(data);
         return new PakChunk(name, offset, data);
+    }
+
+    private static MapPacket readMap(DataInputStream in) throws IOException {
+        int w = in.readInt(), h = in.readInt(), n = in.readInt();
+        if (w < 0 || h < 0 || n < 0 || w * h != n || n > MAX_FRAME_SIZE / 4)
+            throw new IOException("Invalid map packet: " + w + "x" + h + " tiles=" + n);
+        int[] tiles = new int[n];
+        for (int i = 0; i < n; i++) tiles[i] = in.readInt();
+        return new MapPacket(w, h, tiles);
     }
 
     private static Dialog readDialog(DataInputStream in) throws IOException {

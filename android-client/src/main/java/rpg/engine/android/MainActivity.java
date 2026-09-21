@@ -12,19 +12,17 @@ import java.util.*;
 import java.io.File;
 import java.nio.file.Path;
 import rpg.engine.android.controls.*;
-import rpg.engine.map.RMap;
-import rpg.engine.map.RMapIO;
-import rpg.engine.map.TileLayer;
-import rpg.engine.network.Input;
-import rpg.engine.network.Snapshot;
-import rpg.engine.network.Welcome;
-import rpg.engine.network.UiLayout;
+import rpg.engine.network.*;
+import rpg.engine.script.client.ClientScriptEngine;
 
 public final class MainActivity extends Activity implements ClientSession.Listener {
     private ControlLayout controls;
     private ControlOverlay overlay;
     private GameView game;
     private ClientSession session;
+    /** Client-side "mini-sandbox": server-pushed Lua scripts drive custom HUD screens and forward
+     *  host-chosen command values back to the server. Created in showGame; null → layouts as-is. */
+    private ClientScriptEngine clientScript;
     private final EnumSet<ControlAction> held = EnumSet.noneOf(ControlAction.class);
     private int actionBits;
     private boolean editing;
@@ -218,10 +216,17 @@ public final class MainActivity extends Activity implements ClientSession.Listen
         // ── Game stage ──
         FrameLayout stage = new FrameLayout(this);
         game = new GameView(this);
-        loadHostMap();
+        clientScript = new ClientScriptEngine(new ClientScriptEngine.Sink() {
+            @Override public void sendCommand(int code, String arg) { if (session != null) session.cmd(code, arg); }
+            @Override public void notify(String text) { game.addToast(text); }
+            @Override public void layout(List<Map<String, Object>> widgets, List<String> strings) {
+                game.setLayout(widgets, strings);
+            }
+        });
         stage.addView(game, new FrameLayout.LayoutParams(-1, -1));
         overlay = new ControlOverlay(this, controls, (a, pressed) -> onAction(a, pressed));
         overlay.setZoomListener(f -> game.setZoom(f));
+        overlay.setTapListener((fx, fy) -> game.tapWidget(fx, fy));
         stage.addView(overlay, new FrameLayout.LayoutParams(-1, -1));
         root.addView(stage, new FrameLayout.LayoutParams(-1, -1));
 
@@ -556,21 +561,6 @@ public final class MainActivity extends Activity implements ClientSession.Listen
     }
     private int dp(int n) { return (int)(n * getResources().getDisplayMetrics().density + .5f); }
 
-    /** Loads the first *.rmap from the host folder so the floor matches the served map. */
-    private void loadHostMap() {
-        try {
-            java.io.File[] maps = appStorage.hostDir().listFiles((d, n) -> n.endsWith(".rmap"));
-            if (maps != null && maps.length > 0) {
-                java.util.Arrays.sort(maps, (a, b) -> a.getName().compareToIgnoreCase(b.getName()));
-                try (java.io.InputStream in = new java.io.FileInputStream(maps[0])) {
-                    game.setMap(RMapIO.read(in));
-                }
-            }
-        } catch (Exception e) {
-            logger.error("Host map load failed", e);
-        }
-    }
-
     /** The connection button doubles as disconnect while connected. */
     private void updateConnectUi() {
         if (connectButton != null) connectButton.setText(connected ? "Disconnect" : "Connect");
@@ -639,6 +629,16 @@ public final class MainActivity extends Activity implements ClientSession.Listen
         runOnUiThread(() -> { if (game != null) game.reloadAssets(); });
     }
     private void logAsset(String name) { logger.info("Assets: " + name + " received, atlas reloaded"); }
+    @Override public void map(MapPacket m) {
+        runOnUiThread(() -> { if (game != null) game.setNetMap(m); });
+    }
+    @Override public void script(Script s) {
+        runOnUiThread(() -> {
+            String msg = (clientScript != null && clientScript.load(s.name(), s.source()))
+                    ? "UI script: " + s.name() : "UI script error: " + s.name();
+            if (status != null) status.setText(msg);
+        });
+    }
     @Override public void ui(UiLayout u) {
         runOnUiThread(() -> {
             if (UiLayout.KIND_NOTIFY.equals(u.kind())) {
@@ -648,10 +648,20 @@ public final class MainActivity extends Activity implements ClientSession.Listen
                 logger.info("Dialog id=" + u.dialogId() + " choices=" + u.choiceTexts());
                 showDialog(u);
             } else if (UiLayout.KIND_LAYOUT.equals(u.kind())) {
-                // Host-driven widget surface — forwarded to the blind renderer in GameView.
-                game.setLayout(u);
+                // Host-driven widget surface — the sandbox re-wraps it (ui.on_layout) or it passes
+                // through to the blind renderer; the sink's layout() forwards to GameView.
+                if (clientScript != null) clientScript.onLayout(u.layoutWidgets(), u.strings());
+                else game.setLayout(u.layoutWidgets(), u.strings());
             }
         });
+    }
+
+    /** A widget button with a host-chosen command was pressed: the client script (if loaded)
+     *  decides what to do — e.g. build a local screen or forward via ui.send — otherwise the raw
+     *  custom command goes straight to the server. */
+    private void handleWidgetCommand(int code, String value) {
+        if (clientScript != null && clientScript.isLoaded()) clientScript.invokeCommand(code, value);
+        else if (code >= 0 && session != null) session.cmd(code, value);
     }
 
     /**
@@ -730,27 +740,26 @@ public final class MainActivity extends Activity implements ClientSession.Listen
         private static final long TOAST_DURATION_MS = 4000;
         private final List<ToastRecord> toasts = new ArrayList<>();
         private record ToastRecord(String text, long at) {}
-        /** Real map ground layer (from the host folder's *.rmap); null → procedural floor. */
-        private volatile int[] mapTiles;
-        private volatile int mapW, mapH;
-        private volatile boolean hasMap;
+        /** Ground layer streamed by the server (MapPacket); null → empty floor (no connection). */
+        private volatile int[] netTiles;
+        private volatile int netW, netH;
+        private volatile boolean hasNetMap;
         private volatile boolean cameraFollow = true;
         GameView(Context c) {
             super(c);
             p.setTypeface(Typeface.create("sans", Typeface.NORMAL));
             reloadAssets();
         }
-        void setMap(RMap map) {
-            if (map == null || map.layers().isEmpty()) {
-                hasMap = false;
+        void setNetMap(MapPacket m) {
+            if (m == null) {
+                hasNetMap = false;
                 invalidate();
                 return;
             }
-            TileLayer ground = map.layers().get(0);
-            mapW = ground.width();
-            mapH = ground.height();
-            mapTiles = ground.tiles();
-            hasMap = true;
+            netW = m.width();
+            netH = m.height();
+            netTiles = m.tiles();
+            hasNetMap = true;
             invalidate();
         }
         void setZoom(float factor) {
@@ -766,9 +775,9 @@ public final class MainActivity extends Activity implements ClientSession.Listen
             if (toasts.size() > 5) toasts.remove(0);
             invalidate();
         }
-        void setLayout(UiLayout u) {
-            layoutWidgets = u.layoutWidgets();
-            layoutStrings = u.strings();
+        void setLayout(List<Map<String, Object>> widgets, List<String> strings) {
+            layoutWidgets = widgets;
+            layoutStrings = strings;
             invalidate();
         }
         void reloadAssets() {
@@ -782,6 +791,11 @@ public final class MainActivity extends Activity implements ClientSession.Listen
         void setSnapshot(Snapshot s) { snapshot = s; invalidate(); }
         @Override protected void onDraw(Canvas c) {
             c.drawColor(Color.rgb(36, 48, 42));
+            // The paint is shared with the widget/toast overlay, which leaves semi-transparent
+            // colors behind (toast fade-out ends near alpha 0). Tiles and sprites are drawn with
+            // drawBitmap() through that same paint, so without this reset the floor faded out
+            // with each sky.lua toast and stayed invisible until the next one arrived.
+            p.setAlpha(255);
             float tile = 48 * zoom;
             float ox = getWidth() / 2f, oy = getHeight() / 3f;
             if (cameraFollow) {
@@ -797,19 +811,15 @@ public final class MainActivity extends Activity implements ClientSession.Listen
             }
             p.setStyle(Paint.Style.FILL);
             int tileCount = atlas.tileCount();
-            if (hasMap) {
-                // Real floor from the host map — tiles line up exactly with snapshot entities.
-                for (int y = 0; y < mapH; y++) for (int x = 0; x < mapW; x++) {
+            if (hasNetMap) {
+                // Real floor streamed by the server — tiles line up exactly with snapshot entities.
+                for (int y = 0; y < netH; y++) for (int x = 0; x < netW; x++) {
                     float sx = ox + (x - y) * tile * .5f, sy = oy + (x + y) * tile * .25f;
-                    int id = mapTiles[y * mapW + x];
+                    int id = netTiles[y * netW + x];
                     drawTile(c, sx, sy, tile, (id >= 0 && id < tileCount) ? id : -1);
                 }
-            } else {
-                for (int y = -8; y < 16; y++) for (int x = -12; x < 14; x++) {
-                    float sx = ox + (x - y) * tile * .5f, sy = oy + (x + y) * tile * .25f;
-                    drawTile(c, sx, sy, tile, floorTileId(x, y, tileCount));
-                }
             }
+            // Без карты (нет соединения / сервер без карты) пол пустой: пустой игровой экран.
             for (Snapshot.EntityState e : snapshot.entities()) {
                 float sx = ox + (float)(e.x() - e.y()) * tile * .5f;
                 float sy = oy + (float)(e.x() + e.y()) * tile * .25f - (float)e.elevation() * 12 * zoom;
@@ -849,15 +859,8 @@ public final class MainActivity extends Activity implements ClientSession.Listen
                 c.drawPath(diamond, p);
             }
         }
-        /** Coherent procedural floor: mostly grass with sparse dirt/light patches (stable per cell). */
-        private int floorTileId(int x, int y, int tileCount) {
-            if (tileCount <= 0) return -1;
-            int h = Math.abs(x * 31 + y * 17) % 103;
-            if (h == 0 && tileCount > 1) return 1;
-            if (h == 7 && tileCount > 7) return 7;
-            if (h == 19 && tileCount > 8) return 8;
-            return 0;
-        }
+        /** Coherent procedural floor is gone: the floor comes only from the server now (MapPacket).
+         *  Without a connection the game screen is empty. */
 
         /** Blind renderer for the host-driven widget schema (UiLayout kind "layout"). */
         private void drawLayout(Canvas c) {
@@ -902,7 +905,44 @@ public final class MainActivity extends Activity implements ClientSession.Listen
                         p.setTextSize(num(w, "size", 12) * density);
                         c.drawText(s, x, y + p.getTextSize(), p);
                     }
+                    case "button" -> {
+                        float ww = num(w, "w", 0.1f) * W, hh = num(w, "h", 0.05f) * H;
+                        p.setStyle(Paint.Style.FILL);
+                        p.setColor(0xE01F2429);
+                        c.drawRoundRect(x, y, x + ww, y + hh, dp(3), dp(3), p);
+                        p.setColor(0xFF66A366);
+                        p.setStyle(Paint.Style.STROKE);
+                        p.setStrokeWidth(dp(2));
+                        c.drawRoundRect(x, y, x + ww, y + hh, dp(3), dp(3), p);
+                        p.setStyle(Paint.Style.FILL);
+                        int ref2 = (int) num(w, "ref", -1);
+                        String label = ref2 >= 0 && ref2 < layoutStrings.size() ? layoutStrings.get(ref2)
+                                : str(w, "value", "");
+                        if (!label.isEmpty()) {
+                            p.setColor(Color.WHITE);
+                            p.setTextSize(num(w, "size", 12) * density);
+                            float tw2 = p.measureText(label);
+                            c.drawText(label, x + (ww - tw2) / 2f, y + hh / 2f - (p.ascent() + p.descent()) / 2f, p);
+                        }
+                    }
                     default -> { }
+                }
+            }
+        }
+
+        /** Hit-test a tap (screen fractions) against interactive widgets; a "button" press is
+         *  routed to the client script (or straight to the server). */
+        void tapWidget(float fx, float fy) {
+            if (layoutWidgets.isEmpty()) return;
+            float W = getWidth(), H = getHeight();
+            float px = fx * W, py = fy * H;
+            for (Map<String, Object> w : layoutWidgets) {
+                if (!"button".equals(str(w, "type", ""))) continue;
+                float x0 = num(w, "x", 0) * W, y0 = num(w, "y", 0) * H;
+                float w0 = num(w, "w", 0) * W, h0 = num(w, "h", 0) * H;
+                if (px >= x0 && px <= x0 + w0 && py >= y0 && py <= y0 + h0) {
+                    MainActivity.this.handleWidgetCommand((int) num(w, "cmd", -1), str(w, "value", ""));
+                    return;
                 }
             }
         }

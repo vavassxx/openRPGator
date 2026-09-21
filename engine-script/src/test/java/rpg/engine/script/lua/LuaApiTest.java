@@ -189,9 +189,11 @@ class LuaApiTest {
         final List<String> broadcasts = new ArrayList<>();
         final List<DialogCall> dialogs = new ArrayList<>();
         final List<LayoutCall> layouts = new ArrayList<>();
+        final List<ScriptCall> scripts = new ArrayList<>();
 
         record DialogCall(long dialogId, long playerId, String text, List<String> choices, DialogCallback cb) {}
         record LayoutCall(long playerId, String layoutJson, List<String> strings) {}
+        record ScriptCall(long playerId, String name, String source) {}
 
         @Override public void broadcastNotify(String text) { broadcasts.add(text); }
         @Override public void notifyTo(long playerEntityId, String text) {}
@@ -201,6 +203,9 @@ class LuaApiTest {
         @Override public void clearDialogs(long playerEntityId) {}
         @Override public void layoutTo(long playerEntityId, String layoutJson, List<String> strings) {
             layouts.add(new LayoutCall(playerEntityId, layoutJson, strings));
+        }
+        @Override public void scriptTo(long playerEntityId, String name, String source) {
+            scripts.add(new ScriptCall(playerEntityId, name, source));
         }
     }
 
@@ -232,6 +237,37 @@ class LuaApiTest {
         assertTrue(l.layoutJson().contains("\"value\":95"), l.layoutJson());
         assertTrue(l.layoutJson().contains("\"max\":100"), l.layoutJson());
         assertTrue(l.layoutJson().contains("\"ref\":1"), l.layoutJson());
+    }
+
+    @Test
+    void sendScriptRoutesToSink() {
+        RecordingSink sink = new RecordingSink();
+        api.setUiSink(sink);
+        EntityId player = world.spawn();
+        world.entities().set(player, new Name("player"));
+        world.entities().set(player, new Transform(new WorldPosition(0, 0, 0), 0));
+        scripts.execute(
+                "engine.send_script(world.get('player'), 'ui.notify(1)', 'sandbox-demo')", "send_script_test");
+        assertEquals(1, sink.scripts.size());
+        var sc = sink.scripts.get(0);
+        assertEquals(player.value(), sc.playerId());
+        assertEquals("sandbox-demo", sc.name());
+        assertEquals("ui.notify(1)", sc.source());
+    }
+
+    @Test
+    void onCommandDispatchesToRegisteredHandler() {
+        EntityId player = world.spawn();
+        world.entities().set(player, new Name("player"));
+        world.entities().set(player, new Transform(new WorldPosition(0, 0, 0), 0));
+        scripts.execute(
+                "last_cmd = -1; last_arg = ''; last_pid = -1;"
+                        + " engine.on_command(function(p, code, arg) last_cmd = code; last_arg = arg; last_pid = p.id() end)",
+                "cmd_test");
+        api.dispatchCommand(player.value(), 9002, "sword");
+        assertEquals(9002, globals.get("last_cmd").toint());
+        assertEquals("sword", globals.get("last_arg").tojstring());
+        assertEquals(player.value(), globals.get("last_pid").tolong());
     }
 
     @Test

@@ -161,6 +161,10 @@ public final class ServerHost {
             // Register only after Welcome: the tick thread broadcasts snapshots to every client,
             // so a client must not be reachable before its handshake has completed.
             clients.put(entityId, client);
+            // Stream the authoritative ground layer right after the handshake: the client never
+            // reads a local .rmap — without this packet its floor stays empty.
+            MapPacket mapPacket = mapPacket();
+            if (mapPacket != null) client.send(mapPacket);
 
             while (running && !s.isClosed()) {
                 Packet q = Protocol.read(in);
@@ -169,6 +173,9 @@ public final class ServerHost {
                 } else if (q instanceof DialogResponse r) {
                     // Deliver under the world lock: Lua dialogs must not race the tick thread.
                     synchronized (worldLock) { runtime.respondDialog(r.dialogId(), r.choice()); }
+                } else if (q instanceof Cmd c) {
+                    // Custom command from a widget button / client script; value is host-owned.
+                    synchronized (worldLock) { runtime.dispatchCommand(entityId, c.code(), c.arg()); }
                 }
             }
         } catch (Exception ignored) {
@@ -248,7 +255,18 @@ public final class ServerHost {
                 Client c = clients.get(playerEntityId);
                 if (c != null) c.send(UiLayout.layout(layoutJson, strings));
             }
+            @Override public void scriptTo(long playerEntityId, String name, String source) {
+                Client c = clients.get(playerEntityId);
+                if (c != null) c.send(new Script(name, source));
+            }
         };
+    }
+
+    /** The authoritative ground layer to stream on connect; null if the host has no map. */
+    private MapPacket mapPacket() {
+        if (runtime == null || runtime.map() == null || runtime.map().layers().isEmpty()) return null;
+        var ground = runtime.map().layers().get(0);
+        return new MapPacket(ground.width(), ground.height(), ground.tiles());
     }
 
     private static final class Client {

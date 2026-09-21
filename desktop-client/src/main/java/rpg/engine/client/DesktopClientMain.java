@@ -2,9 +2,7 @@ package rpg.engine.client;
 
 import rpg.engine.render.desktop.LwjglRenderer;
 import rpg.engine.runtime.GameRuntime;
-import rpg.engine.map.RMap;
-import rpg.engine.map.RMapIO;
-import rpg.engine.map.TileLayer;
+import rpg.engine.script.client.ClientScriptEngine;
 import rpg.engine.network.*;
 import rpg.engine.core.component.Transform;
 import rpg.engine.core.io.DataDir;
@@ -19,10 +17,11 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * Desktop game client — connects to a server, renders isometric tiles from an .rmap file,
- * receives snapshots for entity state, and sends keyboard input.
+ * Desktop game client — connects to a server, renders the ground map streamed by the host
+ * (`MapPacket`), receives snapshots for entity state, and sends keyboard input.
  *
- * Features: main menu, in-game HUD, toast notifications, modal choice dialogs, mouse UI.
+ * Features: main menu, in-game HUD, toast notifications, modal choice dialogs, host-driven
+ * widget overlays (with buttons) and a client-side Lua "mini-sandbox" for scripted screens.
  *
  * Usage:
  *   openRPGator [options] [map.rmap]
@@ -88,7 +87,8 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
     private final AtomicBoolean applyAssetsPending = new AtomicBoolean(false);
 
     private GameRuntime runtime;
-    private RMap map;
+    /** Ground map streamed by the server ({@link MapPacket}); null → empty floor (no connection). */
+    private volatile MapPacket netMap;
     private Path mapPath;
     private DesktopLocalServer localServer;
     private int localPort = DEFAULT_PORT;
@@ -115,6 +115,13 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
     private volatile List<UiWidget> hudWidgets = List.of();
     private volatile List<String> hudStrings = List.of();
 
+    /**
+     * Client-side "mini-sandbox": server-pushed Lua scripts drive custom HUD screens (inventory…)
+     * and forward host-chosen command values back to the server. Optional — without a script the
+     * widget overlay renders the server layout as-is.
+     */
+    private final ClientScriptEngine clientScript;
+
     private record ToastRecord(String text, long timestamp) {}
     private record ActiveDialog(long dialogId, String text, List<String> choices) {}
 
@@ -139,6 +146,11 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
         // ── Renderer ─────────────────────────────────────────────
         renderer = new LwjglRenderer(1280, 720, "openRPGator");
         session = new DesktopClientSession(this);
+        clientScript = new ClientScriptEngine(new ClientScriptEngine.Sink() {
+            @Override public void sendCommand(int code, String arg) { session.cmd(code, arg); }
+            @Override public void notify(String text) { addToast(text); }
+            @Override public void layout(List<Map<String, Object>> widgets, List<String> strings) { /* render loop reads accessors */ }
+        });
 
         if (zoomArg != null) renderer.setZoom(zoomArg);
 
@@ -558,13 +570,13 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
             if (myId > 0 && e.id() == myId) { camTarget = e; break; }
         }
         if (cameraFollow && camTarget != null) renderer.setCamera(camTarget.x(), camTarget.y());
-        else if (map != null && !cameraFollow) {
+        else if (netMap != null && !cameraFollow) {
             // Follow disabled: keep the last camera position instead of snapping to the player.
-        } else if (map != null) renderer.setCamera(map.width() / 2.0, map.height() / 2.0);
+        } else if (netMap != null) renderer.setCamera(netMap.width() / 2.0, netMap.height() / 2.0);
 
         // ── Auto-fit map into view once ──────────────────────────
-        if (zoomArg == null && map != null && renderer.zoom() <= 1.0) {
-            double diag = Math.max(map.width(), map.height());
+        if (zoomArg == null && netMap != null && renderer.zoom() <= 1.0) {
+            double diag = Math.max(netMap.width(), netMap.height());
             double fit = Math.min(w / (diag * 32.0 + 32), h / (diag * 16.0 + 32));
             renderer.setZoom(Math.max(0.25, Math.min(fit, 4.0)));
         }
@@ -573,16 +585,12 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
         renderer.begin(w, h);
         renderer.applyCamera();
 
-        // Tiles
-        if (map != null && !map.layers().isEmpty()) {
-            TileLayer ground = map.layers().get(0);
-            for (int y = 0; y < ground.height(); y++)
-                for (int x = 0; x < ground.width(); x++)
-                    renderer.tile(x, y, ground.tiles()[y * ground.width() + x]);
-        } else {
-            for (int y = -4; y < 20; y++)
-                for (int x = -4; x < 24; x++)
-                    renderer.tile(x, y, (x + y) % 3);
+        // Tiles — the floor comes ONLY from the server (MapPacket). No connection / no server
+        // map → empty game screen; the client never reads a local .rmap for rendering.
+        if (netMap != null) {
+            for (int y = 0; y < netMap.height(); y++)
+                for (int x = 0; x < netMap.width(); x++)
+                    renderer.tile(x, y, netMap.tiles()[y * netMap.width() + x]);
         }
 
         // Entities from snapshots — sprites are addressed by name ("player", prefab, ...)
@@ -602,6 +610,8 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
 
         // ── Host-driven widget overlay (UiLayout kind "layout") ──
         renderWidgets(w, h);
+        if (activeDialog == null && renderer.mouseClicked(0))
+            handleWidgetClick(w, h, renderer.mouseX(), renderer.mouseY());
 
         // ── Toast notifications (bottom-right, stacked) ──────────
         renderToasts(w, h);
@@ -634,21 +644,58 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
                         renderer.text(px, py, s, Math.max(1, wt.size()), col[0], col[1], col[2]);
                     }
                 }
+                case "button" -> {
+                    boolean hover = renderer.mouseX() >= px && renderer.mouseX() <= px + pw
+                            && renderer.mouseY() >= py && renderer.mouseY() <= py + ph;
+                    if (hover)
+                        renderer.rect(px, py, pw, ph, 0.2f, 0.35f, 0.25f, 0.95f);
+                    else
+                        renderer.rect(px, py, pw, ph, 0.12f, 0.14f, 0.18f, 0.95f);
+                    renderer.rect(px, py, pw, 2, 0.4f, 0.6f, 0.4f, 1f);
+                    renderer.rect(px, py + ph - 2, pw, 2, 0.4f, 0.6f, 0.4f, 1f);
+                    renderer.rect(px, py, 2, ph, 0.4f, 0.6f, 0.4f, 1f);
+                    renderer.rect(px + pw - 2, py, 2, ph, 0.4f, 0.6f, 0.4f, 1f);
+                    String label = wt.ref() >= 0 && wt.ref() < hudStrings.size() ? hudStrings.get(wt.ref())
+                            : (wt.payload() != null && !wt.payload().isEmpty() ? wt.payload() : "");
+                    if (!label.isEmpty()) {
+                        double tw = renderer.textWidth(label, 1);
+                        renderer.text(px + (pw - tw) / 2, py + (ph - 8) / 2, label, 1, 0.9f, 0.95f, 0.9f);
+                    }
+                }
                 default -> { }
+            }
+        }
+    }
+
+    /**
+     * A click on an interactive widget ("button" with a host-chosen {@code cmd}) — routed to the
+     * client script when one is loaded (it decides what to do, e.g. {@code ui.send}); otherwise
+     * the raw custom command goes straight to the server.
+     */
+    private void handleWidgetClick(int w, int h, double mx, double my) {
+        for (UiWidget wt : hudWidgets) {
+            if (!"button".equals(wt.type())) continue;
+            double px = wt.x() * w, py = wt.y() * h, pw = wt.w() * w, ph = wt.h() * h;
+            if (mx >= px && mx <= px + pw && my >= py && my <= py + ph) {
+                if (clientScript.isLoaded()) clientScript.invokeCommand(wt.cmd(), wt.payload());
+                else if (wt.cmd() >= 0) session.cmd(wt.cmd(), wt.payload());
+                return;
             }
         }
     }
 
     /** Widget descriptor parsed from the host layout schema (see {@code UiLayout.layout}). */
     private record UiWidget(String type, double x, double y, double w, double h,
-                            double value, double max, int ref, int size, float[] color, float[] back, float[] bg) {
+                            double value, double max, int ref, int size, float[] color, float[] back, float[] bg,
+                            int cmd, String payload) {
         static UiWidget of(Map<String, Object> m) {
             float[] fill = col(m, "color");
             if (fill == null) fill = col(m, "fill"); // bars from the Lua layout use "fill"
             return new UiWidget(str(m, "type"), num(m, "x", 0), num(m, "y", 0), num(m, "w", 0), num(m, "h", 0),
                     num(m, "value", 0), num(m, "max", 1), (int) num(m, "ref", -1),
                     Math.max(1, (int) Math.ceil(num(m, "size", 12) / 8.0)), // 5×7 font ≈ 8px per scale
-                    fill, col(m, "back"), col(m, "bg"));
+                    fill, col(m, "back"), col(m, "bg"),
+                    (int) num(m, "cmd", -1), str(m, "value"));
         }
         private static double num(Map<String, Object> m, String k, double dflt) {
             Object v = m.get(k);
@@ -764,12 +811,7 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
         localPlayerId.set(w.entityId());
         connected = true;
         statusText = "Connected #" + w.entityId();
-        // Load map for tile rendering if not loaded yet
-        if (map == null && mapPath != null) {
-            try {
-                map = RMapIO.read(mapPath);
-            } catch (Exception e) { addToast("Map load error: " + e.getMessage()); }
-        }
+        // The floor map arrives on the wire (MapPacket) — the client reads no local .rmap.
         // Load pak assets received during the handshake (sprites + tiles) into the renderer.
         // Cached paks are added by onPakCached, downloaded ones by onPakDone — both run on the
         // network thread, so read a consistent snapshot under the lock.
@@ -793,6 +835,13 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
     }
 
     @Override public void onSnapshot(Snapshot s) { latestSnapshot.set(s); }
+    @Override public void onMap(MapPacket m) { netMap = m; }
+    @Override public void onScript(Script s) {
+        if (clientScript.load(s.name(), s.source()))
+            addToast("UI script: " + s.name());
+        else
+            addToast("UI script error: " + s.name());
+    }
     @Override public void onUi(UiLayout u) {
         if (UiLayout.KIND_NOTIFY.equals(u.kind())) {
             addToast(u.bodyText());
@@ -800,8 +849,10 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
             activeDialog = new ActiveDialog(u.dialogId(), u.bodyText(), u.choiceTexts());
         } else if (UiLayout.KIND_LAYOUT.equals(u.kind())) {
             // Host-driven widget surface — render the schema as-is, never infer game meaning.
-            hudStrings = u.strings();
-            hudWidgets = u.layoutWidgets().stream().map(UiWidget::of).toList();
+            // A client-side sandbox may re-wrap it (ui.on_layout); without one it passes through.
+            clientScript.onLayout(u.layoutWidgets(), u.strings());
+            hudStrings = clientScript.renderedStrings();
+            hudWidgets = clientScript.renderedWidgets().stream().map(UiWidget::of).toList();
         }
     }
     @Override public void onStatus(String s) {

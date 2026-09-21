@@ -9,11 +9,15 @@ import java.util.*;
 public final class ControlOverlay extends View {
     public interface Listener { void action(ControlAction action, boolean pressed); }
     public interface ZoomListener { void zoom(float factor); }
+    /** A plain tap that hit no control (screen fractions 0..1) — forwarded to the HUD widget layer. */
+    public interface TapListener { void tap(float fx, float fy); }
     private final ControlLayout layout; private final Listener listener; private final Paint p=new Paint(Paint.ANTI_ALIAS_FLAG);
     private boolean editMode; private ControlBinding selected; private float lastX,lastY; private final HashSet<ControlAction> held=new HashSet<>();
     private ZoomListener zoomListener; private float pinchStart = -1;
+    private TapListener tapListener; private float downX, downY; private boolean downMiss;
     public ControlOverlay(Context c,ControlLayout l,Listener listener){super(c);this.layout=l;this.listener=listener;setLayerType(View.LAYER_TYPE_SOFTWARE,null);}
     public void setZoomListener(ZoomListener l){zoomListener=l;}
+    public void setTapListener(TapListener l){tapListener=l;}
     public void setEditMode(boolean v){editMode=v;invalidate();}
     public boolean isEditMode(){return editMode;}
     public ControlBinding selected(){return selected;}
@@ -34,9 +38,15 @@ public final class ControlOverlay extends View {
         // Two or more pointers = pinch-to-zoom; release button presses so they never stick.
         if (e.getPointerCount() >= 2) return pinch(e);
         float x=e.getX(),y=e.getY();
-        if(e.getActionMasked()==MotionEvent.ACTION_DOWN){selected=hit(x,y);lastX=x;lastY=y;if(selected!=null){if(editMode){invalidate();}else if(held.add(selected.action))listener.action(selected.action,true);}return true;}
+        if(e.getActionMasked()==MotionEvent.ACTION_DOWN){selected=hit(x,y);lastX=x;lastY=y;downX=x;downY=y;downMiss=selected==null;if(selected!=null){if(editMode){invalidate();}else if(held.add(selected.action))listener.action(selected.action,true);}return true;}
         if(e.getActionMasked()==MotionEvent.ACTION_MOVE&&selected!=null&&editMode){float dx=(x-lastX)/getWidth(),dy=(y-lastY)/getHeight();selected.x=Math.max(0,Math.min(1,selected.x+dx));selected.y=Math.max(0,Math.min(1,selected.y+dy));lastX=x;lastY=y;invalidate();return true;}
-        if(e.getActionMasked()==MotionEvent.ACTION_UP&&selected!=null&&!editMode){if(held.remove(selected.action))listener.action(selected.action,false);}return true;
+        if(e.getActionMasked()==MotionEvent.ACTION_UP&&selected!=null&&!editMode){if(held.remove(selected.action))listener.action(selected.action,false);}
+        else if(e.getActionMasked()==MotionEvent.ACTION_UP&&tapListener!=null&&!editMode&&downMiss){
+            // Tap that hit no control and did not drift — the HUD widget layer (custom screens)
+            // decides what it means (fractions of the screen).
+            float dx=x-downX,dy=y-downY;
+            if(dx*dx+dy*dy<24*24)tapListener.tap(x/getWidth(),y/getHeight());
+        }return true;
     }
     /** Pinch gesture: incremental distance ratio → zoom factor; cancels held buttons on transition. */
     private boolean pinch(MotionEvent e){

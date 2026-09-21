@@ -14,6 +14,40 @@ class ProtocolTest {
     }
 
     @Test
+    void roundTripsScriptCmdAndMap() throws IOException {
+        Script script = new Script("sandbox-demo", "ui.notify('hello'); ui.send(9002, 'sword')");
+        Script scriptRt = (Script) roundTrip(script);
+        assertEquals(script.name(), scriptRt.name());
+        assertEquals(script.source(), scriptRt.source());
+
+        Cmd cmd = new Cmd(9002, "sword");
+        assertEquals(new Cmd(9002, "sword"), roundTrip(cmd));
+        assertEquals(new Cmd(7, ""), roundTrip(new Cmd(7, null)));
+
+        MapPacket map = new MapPacket(3, 2, new int[]{0, 1, 2, 3, 4, 5});
+        MapPacket mapRt = (MapPacket) roundTrip(map);
+        assertEquals(3, mapRt.width());
+        assertEquals(2, mapRt.height());
+        assertArrayEquals(new int[]{0, 1, 2, 3, 4, 5}, mapRt.tiles());
+    }
+
+    @Test
+    void rejectsBrokenMapPackets() {
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        try {
+            DataOutputStream out = new DataOutputStream(bytes);
+            out.writeInt(13); // type byte + 3 ints
+            out.writeByte(14);
+            out.writeInt(3); out.writeInt(2); out.writeInt(7); // 3x2 must have 6 tiles
+            out.flush();
+            Protocol.read(new ByteArrayInputStream(bytes.toByteArray()));
+            fail("expected IOException");
+        } catch (IOException expected) {
+            assertTrue(expected.getMessage().contains("map packet"), expected.getMessage());
+        }
+    }
+
+    @Test
     void roundTripsAllPackets() throws IOException {
         assertEquals(new Hello("тест"), roundTrip(new Hello("тест")));
         assertEquals(new Welcome(42), roundTrip(new Welcome(42)));

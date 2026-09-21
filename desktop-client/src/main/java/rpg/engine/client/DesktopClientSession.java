@@ -19,6 +19,8 @@ final class DesktopClientSession {
         void onConnected(Welcome w);
         void onSnapshot(Snapshot s);
         void onUi(UiLayout u);
+        void onMap(MapPacket m);
+        void onScript(Script s);
         void onStatus(String s);
         void onPakStart(long totalBytes);            // total pak bytes expected (0 = none)
         void onPakProgress(long received, long totalBytes);
@@ -85,6 +87,8 @@ final class DesktopClientSession {
                     switch (q) {
                         case Snapshot snap -> listener.onSnapshot(snap);
                         case UiLayout u -> listener.onUi(u);
+                        case MapPacket m -> listener.onMap(m);
+                        case Script sc -> listener.onScript(sc);
                         // legacy push-UI packets, kept for compatibility with older servers
                         case Notify n -> listener.onUi(UiLayout.notify(n.text()));
                         case Dialog d -> listener.onUi(UiLayout.dialog(d.dialogId(), d.text(), d.choices()));
@@ -114,6 +118,17 @@ final class DesktopClientSession {
         try {
             synchronized (lock) {
                 if (out != null) Protocol.write(out, new DialogResponse(dialogId, choice));
+            }
+        } catch (IOException e) {
+            listener.onStatus("Send failed: " + e.getMessage());
+        }
+    }
+
+    /** Forwards a custom command chosen by the host to the server. */
+    void cmd(int code, String arg) {
+        try {
+            synchronized (lock) {
+                if (out != null) Protocol.write(out, new Cmd(code, arg));
             }
         } catch (IOException e) {
             listener.onStatus("Send failed: " + e.getMessage());

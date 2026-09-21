@@ -18,6 +18,8 @@ final class ClientSession {
         void connected(Welcome w);
         void snapshot(Snapshot s);
         void ui(UiLayout u);
+        void map(MapPacket m);
+        void script(Script s);
         void pakLoaded(String name); // a pak finished buffering to the cache
         void status(String s);
     }
@@ -65,6 +67,8 @@ final class ClientSession {
                     Packet q = Protocol.read(in);
                     if (q instanceof Snapshot s) listener.snapshot(s);
                     else if (q instanceof UiLayout u) listener.ui(u);
+                    else if (q instanceof MapPacket m) listener.map(m);
+                    else if (q instanceof Script sc) listener.script(sc);
                     // legacy push-UI packets, kept for compatibility with older servers
                     else if (q instanceof Notify n) listener.ui(UiLayout.notify(n.text()));
                     else if (q instanceof Dialog d) listener.ui(UiLayout.dialog(d.dialogId(), d.text(), d.choices()));
@@ -94,6 +98,16 @@ final class ClientSession {
         try {
             sender.execute(() -> {
                 try { synchronized (lock) { if (out != null) Protocol.write(out, new DialogResponse(dialogId, choice)); } }
+                catch (IOException e) { listener.status("Send failed: " + e.getMessage()); }
+            });
+        } catch (RejectedExecutionException ignored) {}
+    }
+
+    /** Forwards a custom command chosen by the host to the server. */
+    void cmd(int code, String arg) {
+        try {
+            sender.execute(() -> {
+                try { synchronized (lock) { if (out != null) Protocol.write(out, new Cmd(code, arg)); } }
                 catch (IOException e) { listener.status("Send failed: " + e.getMessage()); }
             });
         } catch (RejectedExecutionException ignored) {}

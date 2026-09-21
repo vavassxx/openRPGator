@@ -27,6 +27,13 @@ public interface UiSink {
      */
     default void layoutTo(long playerEntityId, String layoutJson, List<String> strings) { }
 
+    /**
+     * Pushes a small client-side Lua UI script ("mini-sandbox") to a player. The script runs in
+     * a restricted client runtime ({@code ui.*} API only) and drives the custom HUD the host
+     * composes. No-op by default.
+     */
+    default void scriptTo(long playerEntityId, String name, String source) { }
+
     /** Called by the network layer when a player disconnects, to discard pending dialogs. */
     void clearDialogs(long playerEntityId);
 

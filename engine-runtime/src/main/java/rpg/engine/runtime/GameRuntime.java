@@ -34,6 +34,12 @@ public final class GameRuntime {
         pendingActions.add(() -> scripts.api().respondDialog(dialogId, choice));
     }
 
+    /** Thread-safe: queues a client custom command (widget button / client script) for Lua on the
+     *  next tick. The command value is host-owned — Lua {@code engine.on_command} decodes it. */
+    public void dispatchCommand(long playerEntityId, int code, String arg) {
+        pendingActions.add(() -> scripts.api().dispatchCommand(playerEntityId, code, arg));
+    }
+
     public void loadMap(Path path) throws IOException {
         RMap m = RMapIO.read(path);
         this.map = m;

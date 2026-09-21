@@ -41,6 +41,7 @@ public final class LuaApi {
     private final Map<EntityId, List<LuaFunction>> exitHandlers = new LinkedHashMap<>();
     private final Map<EntityId, List<LuaFunction>> interactHandlers = new LinkedHashMap<>();
     private final List<LuaFunction> globalTickHandlers = new ArrayList<>();
+    private final List<LuaFunction> commandHandlers = new ArrayList<>();
 
     private final AtomicLong dialogIds = new AtomicLong();
     private final Map<Long, LuaFunction> dialogCallbacks = new ConcurrentHashMap<>();
@@ -113,6 +114,22 @@ public final class LuaApi {
             }
         });
         globals.set("engine", engine);
+        engine.set("send_script", new ArgsLib() {
+            public LuaValue callImpl(Varargs args) {
+                long targetId = targetIdOf(args.arg(1));
+                String source = args.arg(2).optjstring("");
+                String name = args.narg() >= 3 ? args.arg(3).optjstring("client") : "client";
+                if (uiSink == null || targetId == -1) return NONE;
+                uiSink.scriptTo(targetId, name, source);
+                return NONE;
+            }
+        });
+        engine.set("on_command", new OneArgFunction() {
+            public LuaValue call(LuaValue fn) {
+                if (fn.isfunction()) commandHandlers.add((LuaFunction) fn);
+                return NONE;
+            }
+        });
 
         LuaTable worldApi = new LuaTable();
         worldApi.set("count", new ZeroArgFunction() { public LuaValue call() { return valueOf(count()); }});
@@ -204,6 +221,19 @@ public final class LuaApi {
         LuaFunction fn = dialogCallbacks.remove(dialogId);
         if (fn == null) return;
         safeCall("dialog", fn, valueOf(choice + 1));
+    }
+
+    /**
+     * Invoked when a client sends a custom command ({@code Cmd}): a widget button press or a
+     * scripted {@code ui.send}. The value of {@code code}/{@code arg} is host-owned — only the
+     * {@code engine.on_command} handlers registered here decode it. Must run on the tick thread.
+     */
+    public void dispatchCommand(long playerEntityId, int code, String arg) {
+        if (commandHandlers.isEmpty() || world == null) return;
+        LuaValue me = entityFacade(new EntityId(playerEntityId));
+        for (LuaFunction fn : List.copyOf(commandHandlers)) {
+            safeCall("on_command", fn, varargsOf(new LuaValue[]{me, valueOf(code), valueOf(arg == null ? "" : arg)}));
+        }
     }
 
     // ── World operations ──────────────────────────────────────────
