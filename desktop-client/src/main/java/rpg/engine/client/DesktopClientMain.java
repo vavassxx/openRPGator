@@ -54,7 +54,8 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
         PRIMARY("Primary", LwjglRenderer.KEY_J),
         SECONDARY("Secondary", LwjglRenderer.KEY_K),
         INTERACT("Interact", LwjglRenderer.KEY_L),
-        INVENTORY("Inventory", LwjglRenderer.KEY_I);
+        INVENTORY("Inventory", LwjglRenderer.KEY_I),
+        CAMERA_FOLLOW("Camera follow", LwjglRenderer.KEY_C);
         final String label;
         final int dflt;
         Action(String label, int dflt) { this.label = label; this.dflt = dflt; }
@@ -105,6 +106,8 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
     private final AtomicLong localPlayerId = new AtomicLong(-1);
     private volatile String statusText = "Offline";
     private volatile boolean connected;
+    /** When enabled, the camera continuously follows the local player. */
+    private boolean cameraFollow = true;
 
     private final List<ToastRecord> toasts = new CopyOnWriteArrayList<>();
     private volatile ActiveDialog activeDialog;
@@ -528,6 +531,12 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
         if (renderer.keyDown(bind(Action.INVENTORY))) actions |= Input.INVENTORY;
         if (dx != 0 || dy != 0 || actions != 0) session.input(dx, dy, actions);
 
+        // Client-only toggle: no server input is generated.
+        if (renderer.keyPressed(bind(Action.CAMERA_FOLLOW))) {
+            cameraFollow = !cameraFollow;
+            addToast("Camera follow: " + (cameraFollow ? "ON" : "OFF"));
+        }
+
         // ESC → back to menu
         if (renderer.keyDown(LwjglRenderer.KEY_ESCAPE)) {
             if (activeDialog != null) { activeDialog = null; }
@@ -548,8 +557,10 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
             if (camTarget == null) camTarget = e;
             if (myId > 0 && e.id() == myId) { camTarget = e; break; }
         }
-        if (camTarget != null) renderer.setCamera(camTarget.x(), camTarget.y());
-        else if (map != null) renderer.setCamera(map.width() / 2.0, map.height() / 2.0);
+        if (cameraFollow && camTarget != null) renderer.setCamera(camTarget.x(), camTarget.y());
+        else if (map != null && !cameraFollow) {
+            // Follow disabled: keep the last camera position instead of snapping to the player.
+        } else if (map != null) renderer.setCamera(map.width() / 2.0, map.height() / 2.0);
 
         // ── Auto-fit map into view once ──────────────────────────
         if (zoomArg == null && map != null && renderer.zoom() <= 1.0) {

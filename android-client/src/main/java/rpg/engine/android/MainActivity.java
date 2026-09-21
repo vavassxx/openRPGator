@@ -38,6 +38,9 @@ public final class MainActivity extends Activity implements ClientSession.Listen
     /** Connect/Disconnect toggle button on the game screen; label follows {@link #connected}. */
     private Button connectButton;
     private volatile boolean connected;
+    /** Client-only camera mode: when enabled the camera stays centered on our entity. */
+    private boolean cameraFollow = true;
+    private volatile long localPlayerId = -1;
 
     /** Re-sends movement while a move button is held (≈ server tick rate / 2 at 20 Hz). */
     private static final long MOVE_INTERVAL_MS = 50;
@@ -574,6 +577,14 @@ public final class MainActivity extends Activity implements ClientSession.Listen
     }
 
     private void onAction(ControlAction a, boolean pressed) {
+        if (a == ControlAction.CAMERA_FOLLOW) {
+            if (pressed) {
+                cameraFollow = !cameraFollow;
+                game.setCameraFollow(cameraFollow);
+                status.setText("Camera follow: " + (cameraFollow ? "ON" : "OFF"));
+            }
+            return;
+        }
         if (pressed) held.add(a); else held.remove(a);
         if (a == ControlAction.INTERACT) {
             // Edge-triggered: one interaction per press — never repeated by the hold pump.
@@ -608,7 +619,13 @@ public final class MainActivity extends Activity implements ClientSession.Listen
     }
 
     @Override public void connected(Welcome w) {
-        runOnUiThread(() -> { connected = true; updateConnectUi(); status.setText("Connected #" + w.entityId()); });
+        localPlayerId = w.entityId();
+        runOnUiThread(() -> {
+            connected = true;
+            updateConnectUi();
+            game.setCameraFollow(cameraFollow);
+            status.setText("Connected #" + w.entityId());
+        });
     }
     @Override public void snapshot(Snapshot s) { runOnUiThread(() -> game.setSnapshot(s)); }
     @Override public void status(String s) {
@@ -717,6 +734,7 @@ public final class MainActivity extends Activity implements ClientSession.Listen
         private volatile int[] mapTiles;
         private volatile int mapW, mapH;
         private volatile boolean hasMap;
+        private volatile boolean cameraFollow = true;
         GameView(Context c) {
             super(c);
             p.setTypeface(Typeface.create("sans", Typeface.NORMAL));
@@ -737,6 +755,10 @@ public final class MainActivity extends Activity implements ClientSession.Listen
         }
         void setZoom(float factor) {
             zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoom * factor));
+            invalidate();
+        }
+        void setCameraFollow(boolean enabled) {
+            cameraFollow = enabled;
             invalidate();
         }
         void addToast(String text) {
@@ -760,7 +782,19 @@ public final class MainActivity extends Activity implements ClientSession.Listen
         void setSnapshot(Snapshot s) { snapshot = s; invalidate(); }
         @Override protected void onDraw(Canvas c) {
             c.drawColor(Color.rgb(36, 48, 42));
-            float tile = 48 * zoom, ox = getWidth() / 2f, oy = getHeight() / 3f;
+            float tile = 48 * zoom;
+            float ox = getWidth() / 2f, oy = getHeight() / 3f;
+            if (cameraFollow) {
+                Snapshot.EntityState target = null;
+                for (Snapshot.EntityState e : snapshot.entities()) {
+                    if (e.id() == localPlayerId) { target = e; break; }
+                }
+                if (target != null) {
+                    // Move the world so the player's ground position is exactly at the screen center.
+                    ox -= (float)(target.x() - target.y()) * tile * .5f;
+                    oy -= (float)(target.x() + target.y()) * tile * .25f;
+                }
+            }
             p.setStyle(Paint.Style.FILL);
             int tileCount = atlas.tileCount();
             if (hasMap) {

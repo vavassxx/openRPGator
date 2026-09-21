@@ -12,14 +12,17 @@ public final class ControlLayout {
 
     public static ControlLayout defaults(){
         ControlLayout l=new ControlLayout();
-        l.add("up",ControlAction.MOVE_UP,ControlType.BUTTON,.12f,.68f,.13f,"↑");
-        l.add("down",ControlAction.MOVE_DOWN,ControlType.BUTTON,.12f,.88f,.13f,"↓");
-        l.add("left",ControlAction.MOVE_LEFT,ControlType.BUTTON,.02f,.78f,.13f,"←");
-        l.add("right",ControlAction.MOVE_RIGHT,ControlType.BUTTON,.22f,.78f,.13f,"→");
-        l.add("primary",ControlAction.PRIMARY,ControlType.BUTTON,.84f,.76f,.15f,"A");
-        l.add("secondary",ControlAction.SECONDARY,ControlType.BUTTON,.69f,.88f,.12f,"B");
-        l.add("interact",ControlAction.INTERACT,ControlType.BUTTON,.69f,.70f,.12f,"E");
-        l.add("inventory",ControlAction.INVENTORY,ControlType.BUTTON,.88f,.56f,.09f,"I");
+        // Landscape-friendly default: compact D-pad on the left, action diamond on the
+        // right, and utility toggles kept in the top corners so they do not fight gameplay.
+        l.add("up",ControlAction.MOVE_UP,ControlType.BUTTON,.14f,.69f,.12f,"↑");
+        l.add("down",ControlAction.MOVE_DOWN,ControlType.BUTTON,.14f,.87f,.12f,"↓");
+        l.add("left",ControlAction.MOVE_LEFT,ControlType.BUTTON,.05f,.78f,.12f,"←");
+        l.add("right",ControlAction.MOVE_RIGHT,ControlType.BUTTON,.23f,.78f,.12f,"→");
+        l.add("primary",ControlAction.PRIMARY,ControlType.BUTTON,.86f,.76f,.14f,"A");
+        l.add("secondary",ControlAction.SECONDARY,ControlType.BUTTON,.72f,.86f,.11f,"B");
+        l.add("interact",ControlAction.INTERACT,ControlType.BUTTON,.72f,.68f,.11f,"E");
+        l.add("inventory",ControlAction.INVENTORY,ControlType.BUTTON,.89f,.17f,.09f,"I");
+        l.add("camera-follow",ControlAction.CAMERA_FOLLOW,ControlType.BUTTON,.77f,.17f,.09f,"⌖");
         return l;
     }
     private void add(String id,ControlAction a,ControlType t,float x,float y,float s,String label){bindings.add(new ControlBinding(id,a,t,x,y,s,label));}
@@ -71,7 +74,13 @@ public final class ControlLayout {
             for(String row:raw.split(";")){String[] p=row.split("\\|",-1); if(p.length<7)continue;
                 l.add(p[0],ControlAction.valueOf(p[1]),ControlType.valueOf(p[2]),Float.parseFloat(p[3]),Float.parseFloat(p[4]),Float.parseFloat(p[5]),p[6]);
             }
-            return l.bindings.isEmpty()?defaults():l;
+            if(l.bindings.isEmpty()) return defaults();
+            // Add newly introduced standard actions without disturbing an existing custom layout.
+            boolean hasCameraFollow=false;
+            for(ControlBinding v:l.bindings) if(v.action==ControlAction.CAMERA_FOLLOW){hasCameraFollow=true;break;}
+            if(!hasCameraFollow)
+                l.add("camera-follow",ControlAction.CAMERA_FOLLOW,ControlType.BUTTON,.77f,.17f,.09f,"⌖");
+            return l;
         }catch(Exception e){return defaults();}
     }
     public void reset(){bindings.clear(); bindings.addAll(defaults().bindings);}

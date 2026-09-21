@@ -31,6 +31,7 @@ public final class LwjglRenderer implements Renderer {
             KEY_S = GLFW_KEY_S, KEY_D = GLFW_KEY_D;
     public static final int KEY_UP = GLFW_KEY_UP, KEY_DOWN = GLFW_KEY_DOWN,
             KEY_LEFT = GLFW_KEY_LEFT, KEY_RIGHT = GLFW_KEY_RIGHT;
+    public static final int KEY_C = GLFW_KEY_C;
     public static final int KEY_J = GLFW_KEY_J, KEY_K = GLFW_KEY_K,
             KEY_L = GLFW_KEY_L, KEY_I = GLFW_KEY_I;
     public static final int KEY_EQUAL = GLFW_KEY_EQUAL, KEY_MINUS = GLFW_KEY_MINUS;
