@@ -31,4 +31,8 @@ dependencies {
     implementation 'androidx.core:core:1.15.0'
     implementation project(':engine-map')
     implementation project(':engine-network')
+    implementation project(':engine-runtime')
+    implementation project(':pak')
+    // The embedded Android local server IS the PC server: same authoritative ServerHost/ServerConfig.
+    implementation project(':dedicated-server')
 }

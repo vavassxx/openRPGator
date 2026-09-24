@@ -1,7 +1,13 @@
 .gradle/
 build/
 out/
+out-android/
 *.class
 *.iml
 .idea/
 .vscode/
+
+# personal build scripts and their output
+dist/
+build-apk.sh
+build-linux-x86_64.sh

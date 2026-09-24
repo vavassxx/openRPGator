@@ -1,93 +1,41 @@
 package rpg.engine.android;
 
-import java.io.*;
-import java.net.*;
-import java.util.*;
-import java.util.concurrent.*;
-import rpg.engine.network.*;
+import rpg.engine.server.ServerConfig;
+import rpg.engine.server.ServerHost;
 
-/** Small Android-safe authoritative server. It deliberately uses Java 17 APIs only. */
+import java.io.IOException;
+import java.nio.file.Path;
+
+/**
+ * Android embedded authoritative server — the actual PC server code.
+ *
+ * <p>This is a thin Android wrapper around {@link ServerHost}, the same server the dedicated CLI
+ * and the Swing admin console run (see {@code dedicated-server}). Server content comes from the
+ * {@code data/host} folder: the single auto-selected {@code *.rmap}, every {@code *.pak} pack
+ * streamed during the handshake and the Lua scripts next to the map. {@link ServerConfig}
+ * resolves the host folder exactly like on the desktop, so the server, the local server and the
+ * clients all agree on the host layout. Only Java 17 APIs (Android-compatible).
+ */
 final class LocalServerBackend {
     interface Listener { void status(String message); }
     private final Listener listener;
-    private volatile boolean running;
-    private ServerSocket server;
-    private ExecutorService clients;
-    private final Map<Long, Player> players = new ConcurrentHashMap<>();
-    private long nextId = 1;
+    private final ServerHost host;
+    private int tickRate = ServerConfig.DEFAULT_TICK_HZ;
 
-    LocalServerBackend(Listener listener) { this.listener = listener; }
-
-    synchronized void start(int port) throws IOException {
-        if (running) return;
-        server = new ServerSocket(port);
-        server.setReuseAddress(true);
-        clients = Executors.newCachedThreadPool();
-        running = true;
-        Thread acceptor = new Thread(this::acceptLoop, "openrpg-local-server");
-        acceptor.setDaemon(true);
-        acceptor.start();
-        listener.status("Local server listening on " + port);
+    LocalServerBackend(Listener listener) {
+        this.listener = listener;
+        this.host = new ServerHost(line -> listener.status(line));
     }
 
-    synchronized void stop() {
-        running = false;
-        try { if (server != null) server.close(); } catch (IOException ignored) {}
-        if (clients != null) clients.shutdownNow();
-        players.clear();
-        listener.status("Local server stopped");
+    /** World tick rate in Hz (default 20). Set before {@link #start}. */
+    void setTickRate(int hz) { this.tickRate = hz; }
+
+    /** Starts the server on the shared data dir; content auto-loads from {@code <data>/host}. */
+    synchronized void start(int port, Path dataDir) throws IOException {
+        ServerHost.Config cfg = ServerConfig.resolve(dataDir, port, tickRate, this.listener::status);
+        host.start(cfg);
     }
 
-    boolean isRunning() { return running; }
-
-    private void acceptLoop() {
-        while (running) {
-            try {
-                Socket socket = server.accept();
-                socket.setTcpNoDelay(true);
-                clients.submit(() -> handle(socket));
-            } catch (IOException e) {
-                if (running) listener.status("Local server error: " + e.getMessage());
-            }
-        }
-    }
-
-    private void handle(Socket socket) {
-        Player player = null;
-        try (Socket s = socket) {
-            InputStream in = s.getInputStream();
-            OutputStream out = s.getOutputStream();
-            Packet hello = Protocol.read(in);
-            if (!(hello instanceof Hello)) return;
-            Hello h = (Hello) hello;
-            synchronized (this) { player = new Player(nextId++, h.name()); }
-            players.put(player.id, player);
-            Protocol.write(out, new Welcome(player.id));
-            sendSnapshot(out);
-            while (running && !s.isClosed()) {
-                Packet packet = Protocol.read(in);
-                if (packet instanceof Input) {
-                    Input input = (Input) packet;
-                    player.x += input.dx() * 0.1;
-                    player.y += input.dy() * 0.1;
-                    sendSnapshot(out);
-                }
-            }
-        } catch (IOException ignored) {
-        } finally {
-            if (player != null) players.remove(player.id);
-        }
-    }
-
-    private void sendSnapshot(OutputStream out) throws IOException {
-        List<Snapshot.EntityState> entities = new ArrayList<>();
-        for (Player p : players.values())
-            entities.add(new Snapshot.EntityState(p.id, p.x, p.y, 0));
-        Protocol.write(out, new Snapshot(entities));
-    }
-
-    private static final class Player {
-        final long id; final String name; double x, y;
-        Player(long id, String name) { this.id = id; this.name = name; }
-    }
+    void stop() { host.stop(); }
+    boolean isRunning() { return host.isRunning(); }
 }

@@ -9,7 +9,9 @@ import rpg.engine.core.util.VarInts;
 
 /** Binary .rmap serializer. The stream API is also used by the Android editor. */
 public final class RMapIO {
-    private static final int VERSION = 1;
+    /** v1: entity = id/prefab/position/script; v2 adds entity scale. */
+    private static final int VERSION = 2;
+    private static final int VERSION_1 = 1;
     private static final byte[] MAGIC = {'R','M','A','P'};
     private RMapIO() {}
 
@@ -31,6 +33,7 @@ public final class RMapIO {
             str(out, e.id()); str(out, e.prefab());
             out.writeDouble(e.position().x()); out.writeDouble(e.position().y()); out.writeDouble(e.position().elevation());
             str(out, e.script() == null ? "" : e.script());
+            out.writeDouble(e.scale());
         }
         out.flush();
     }
@@ -42,7 +45,8 @@ public final class RMapIO {
     public static RMap read(InputStream stream) throws IOException {
         DataInputStream in = stream instanceof DataInputStream d ? d : new DataInputStream(new BufferedInputStream(stream));
         for (byte b : MAGIC) if (in.readByte() != b) throw new IOException("bad RMAP");
-        if (in.readInt() != VERSION) throw new IOException("unsupported RMAP version");
+        int version = in.readInt();
+        if (version != VERSION_1 && version != VERSION) throw new IOException("unsupported RMAP version: " + version);
         String n = str(in); int ts = in.readInt(), w = in.readInt(), h = in.readInt();
         var ls = new ArrayList<TileLayer>(); int layerCount = in.readInt();
         for (int i = 0; i < layerCount; i++) {
@@ -51,8 +55,13 @@ public final class RMapIO {
             ls.add(new TileLayer(ln, lw, lh, t, c));
         }
         var es = new ArrayList<MapEntity>(); int entityCount = in.readInt();
-        for (int i = 0; i < entityCount; i++)
-            es.add(new MapEntity(str(in), str(in), new WorldPosition(in.readDouble(), in.readDouble(), in.readDouble()), emptyToNull(str(in))));
+        for (int i = 0; i < entityCount; i++) {
+            MapEntity e = new MapEntity(str(in), str(in),
+                    new WorldPosition(in.readDouble(), in.readDouble(), in.readDouble()),
+                    emptyToNull(str(in)));
+            if (version >= 2) e = new MapEntity(e.id(), e.prefab(), e.position(), e.script(), in.readDouble());
+            es.add(e);
+        }
         return new RMap(n, ts, w, h, ls, es);
     }
 

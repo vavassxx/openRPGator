@@ -1,5 +1,64 @@
 package rpg.engine.server;
-import rpg.engine.runtime.*;import rpg.engine.core.component.*;import rpg.engine.core.math.*;import rpg.engine.network.*;import java.io.*;import java.net.*;import java.nio.file.*;import java.util.*;import java.util.concurrent.*;
-public final class ServerMain {public static void main(String[]args)throws Exception{Path map=null;int port=27800;for(int i=0;i<args.length;i++){if(args[i].equals("--map"))map=Path.of(args[++i]);else if(args[i].equals("--port"))port=Integer.parseInt(args[++i]);else if(args[i].equals("--help")){System.out.println("--map FILE --port PORT");return;}}var rt=new GameRuntime();if(map!=null)rt.loadMap(map);var exec=Executors.newVirtualThreadPerTaskExecutor();try(var server=new ServerSocket(port)){System.out.println("RPG server listening on "+port);ScheduledExecutorService tick=Executors.newSingleThreadScheduledExecutor();tick.scheduleAtFixedRate(() -> { try { rt.tick(); } catch (Throwable t) { t.printStackTrace(); } },0,50,TimeUnit.MILLISECONDS);while(true){Socket s=server.accept();exec.submit(()->client(rt,s));}}}
-private static void client(GameRuntime rt,Socket s){try(s){var in=s.getInputStream();var out=s.getOutputStream();var p=Protocol.read(in);if(!(p instanceof Hello h))return;var e=rt.world().spawn();rt.world().entities().set(e,new Name(h.name()));rt.world().entities().set(e,new Transform(new WorldPosition(0,0,0),0));Protocol.write(out,new Welcome(e.value()));while(true){var q=Protocol.read(in);if(q instanceof Input x){var t=rt.world().entities().get(e,Transform.class).orElseThrow();var desired=new WorldPosition(t.position().x()+x.dx()*0.1,t.position().y()+x.dy()*0.1,t.position().elevation());var moved=rt.world().collision().move(e,desired);rt.world().entities().set(e,new Transform(moved,t.rotation()));var es=rt.world().entities().entities().stream().map(id->rt.world().entities().get(id,Transform.class).map(z->new Snapshot.EntityState(id.value(),z.position().x(),z.position().y(),z.position().elevation())).orElse(null)).filter(Objects::nonNull).toList();Protocol.write(out,new Snapshot(es));}}}catch(IOException ignored){}}
+
+import rpg.engine.core.io.DataDir;
+
+import java.nio.file.Path;
+import java.util.concurrent.CountDownLatch;
+
+/**
+ * Headless authoritative dedicated server entry point.
+ *
+ * <pre>
+ *   --data-dir PATH        data directory (default ~/.openrpgator/data)
+ *   --port PORT            listen port (default 27800)
+ *   --tick-rate HZ         world tick rate in Hz (default 20, 1..240)
+ *   --help
+ * </pre>
+ *
+ * The server content lives in the {@code host} sub-folder of the data directory: the single
+ * {@code *.rmap} there is auto-selected, every {@code *.pak} is streamed to clients and Lua
+ * scripts next to the map are pulled in automatically. Pressing Ctrl+C (or SIGTERM) stops the
+ * server cleanly.
+ */
+public final class ServerMain {
+
+    private static final int DEFAULT_PORT = 27800;
+
+    public static void main(String[] args) throws Exception {
+        Path dataDir = DataDir.root();
+        int port = DEFAULT_PORT;
+        int tickHz = ServerConfig.DEFAULT_TICK_HZ;
+
+        for (int i = 0; i < args.length; i++) {
+            switch (args[i]) {
+                case "--data-dir" -> dataDir = Path.of(args[++i]);
+                case "--port" -> port = Integer.parseInt(args[++i]);
+                case "--tick-rate" -> {
+                    try { tickHz = Integer.parseInt(args[++i]); }
+                    catch (NumberFormatException e) { System.err.println("Invalid --tick-rate: " + args[i]); }
+                }
+                case "--help" -> {
+                    System.out.println("""
+                            --data-dir PATH   data directory (default ~/.openrpgator/data)
+                            --port PORT       listen port (default 27800)
+                            --tick-rate HZ    world tick rate in Hz (default 20, 1..240)
+                            --help""");
+                    return;
+                }
+                default -> System.err.println("Unknown option: " + args[i]);
+            }
+        }
+
+        ServerHost.Config cfg = ServerConfig.resolve(dataDir, port, tickHz, System.err::println);
+
+        ServerHost host = new ServerHost(System.out::println);
+        host.start(cfg);
+        CountDownLatch wait = new CountDownLatch(1);
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> { host.stop(); wait.countDown(); }));
+        try {
+            wait.await();
+        } catch (InterruptedException e) {
+            host.stop();
+        }
+    }
 }

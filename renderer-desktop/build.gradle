@@ -3,6 +3,7 @@ def lwjglNatives = providers.gradleProperty('lwjglNatives').orElse('natives-linu
 
 dependencies {
     api project(':renderer-api')
+    implementation project(':pak')
     implementation "org.lwjgl:lwjgl:${lwjglVersion}"
     implementation "org.lwjgl:lwjgl-glfw:${lwjglVersion}"
     implementation "org.lwjgl:lwjgl-opengl:${lwjglVersion}"

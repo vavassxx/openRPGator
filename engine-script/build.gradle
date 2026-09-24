@@ -1,4 +1,5 @@
 dependencies {
     api project(':engine-world')
+    api project(':engine-map')
     api 'org.luaj:luaj-jse:3.0.1'
 }
