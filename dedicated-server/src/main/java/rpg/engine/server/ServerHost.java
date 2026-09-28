@@ -213,6 +213,9 @@ public final class ServerHost {
         if (x.has(Input.INTERACT))
             runtime.world().interactTarget(moved, 2.0).ifPresent(target ->
                     runtime.world().events().emit(new InteractRequestedEvent(e, target)));
+        if (x.has(Input.PRIMARY)) runtime.dispatchAction(entityId, "primary");
+        if (x.has(Input.SECONDARY)) runtime.dispatchAction(entityId, "secondary");
+        if (x.has(Input.INVENTORY)) runtime.dispatchAction(entityId, "inventory");
         broadcastSnapshot();
         }
     }

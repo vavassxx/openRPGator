@@ -271,6 +271,20 @@ class LuaApiTest {
     }
 
     @Test
+    void onActionDispatchesSemanticPrimaryAction() {
+        EntityId player = world.spawn();
+        world.entities().set(player, new Name("player"));
+        world.entities().set(player, new Transform(new WorldPosition(0, 0, 0), 0));
+        scripts.execute(
+                "last_action = ''; last_pid = -1;"
+                        + " engine.on_action(function(p, action) last_action = action; last_pid = p.id() end)",
+                "action_test");
+        api.dispatchAction(player.value(), "primary");
+        assertEquals("primary", globals.get("last_action").tojstring());
+        assertEquals(player.value(), globals.get("last_pid").tolong());
+    }
+
+    @Test
     void playersAreHostProvided() {
         EntityId p1 = world.spawn();
         EntityId p2 = world.spawn();

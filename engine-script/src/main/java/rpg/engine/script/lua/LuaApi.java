@@ -42,6 +42,7 @@ public final class LuaApi {
     private final Map<EntityId, List<LuaFunction>> interactHandlers = new LinkedHashMap<>();
     private final List<LuaFunction> globalTickHandlers = new ArrayList<>();
     private final List<LuaFunction> commandHandlers = new ArrayList<>();
+    private final List<LuaFunction> actionHandlers = new ArrayList<>();
 
     private final AtomicLong dialogIds = new AtomicLong();
     private final Map<Long, LuaFunction> dialogCallbacks = new ConcurrentHashMap<>();
@@ -127,6 +128,12 @@ public final class LuaApi {
         engine.set("on_command", new OneArgFunction() {
             public LuaValue call(LuaValue fn) {
                 if (fn.isfunction()) commandHandlers.add((LuaFunction) fn);
+                return NONE;
+            }
+        });
+        engine.set("on_action", new OneArgFunction() {
+            public LuaValue call(LuaValue fn) {
+                if (fn.isfunction()) actionHandlers.add((LuaFunction) fn);
                 return NONE;
             }
         });
@@ -233,6 +240,18 @@ public final class LuaApi {
         LuaValue me = entityFacade(new EntityId(playerEntityId));
         for (LuaFunction fn : List.copyOf(commandHandlers)) {
             safeCall("on_command", fn, varargsOf(new LuaValue[]{me, valueOf(code), valueOf(arg == null ? "" : arg)}));
+        }
+    }
+
+    /**
+     * Dispatches semantic client actions to Lua. The network input layer remains authoritative;
+     * scripts receive stable action names instead of depending on the Input bitmask.
+     */
+    public void dispatchAction(long playerEntityId, String action) {
+        if (actionHandlers.isEmpty() || world == null) return;
+        LuaValue me = entityFacade(new EntityId(playerEntityId));
+        for (LuaFunction fn : List.copyOf(actionHandlers)) {
+            safeCall("on_action", fn, varargsOf(new LuaValue[]{me, valueOf(action)}));
         }
     }
 

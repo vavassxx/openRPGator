@@ -40,6 +40,11 @@ public final class GameRuntime {
         pendingActions.add(() -> scripts.api().dispatchCommand(playerEntityId, code, arg));
     }
 
+    /** Thread-safe: queues a semantic client action for the next tick. */
+    public void dispatchAction(long playerEntityId, String action) {
+        pendingActions.add(() -> scripts.api().dispatchAction(playerEntityId, action));
+    }
+
     public void loadMap(Path path) throws IOException {
         RMap m = RMapIO.read(path);
         this.map = m;

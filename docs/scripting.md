@@ -22,6 +22,7 @@ the host are the opposite: they run in a restricted `ui.*` sandbox — see [Clie
 | `engine.layout(player, widgets, strings)` | — | Push a host-driven widget schema to one player (`UiSink.layoutTo`); clients render `panel`/`bar`/`text`/`button` blindly |
 | `engine.send_script(player, source[, name])` | — | Push a small client-side Lua script (the "mini-sandbox") to one player (`UiSink.scriptTo` → wire packet `Script`) |
 | `engine.on_command(fn)` | — | Register a handler for custom commands the client sends back (`fn(player, code, arg)`); the command values are host-chosen — engine/clients never decode them |
+| `engine.on_action(fn)` | — | Register a handler for semantic client actions: `fn(player, action)` where action is `primary`, `secondary`, or `inventory` |
 
 Dialogs/layouts/scripts require the embedding server to install a `UiSink`; without one the calls
 are no-ops. `player` is an entity facade (e.g. `world.get('id')`) or a raw entity id. `engine.layout`
