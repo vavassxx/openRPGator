@@ -745,6 +745,10 @@ public final class MainActivity extends Activity implements ClientSession.Listen
         private volatile int netW, netH;
         private volatile boolean hasNetMap;
         private volatile boolean cameraFollow = true;
+        // The game surface is full-screen, but the collapsible server panel owns a small
+        // header at the very top. Host layouts use normalized coordinates from 0..1; reserve
+        // that header area so host UI can never be painted underneath it on Android.
+        private float hostUiTopInset() { return dp(40); }
         GameView(Context c) {
             super(c);
             p.setTypeface(Typeface.create("sans", Typeface.NORMAL));
@@ -866,10 +870,12 @@ public final class MainActivity extends Activity implements ClientSession.Listen
         private void drawLayout(Canvas c) {
             if (layoutWidgets.isEmpty()) return;
             float W = getWidth(), H = getHeight();
+            float top = hostUiTopInset();
+            float safeH = Math.max(1f, H - top);
             float density = getResources().getDisplayMetrics().density;
             for (Map<String, Object> w : layoutWidgets) {
                 String type = str(w, "type", "");
-                float x = num(w, "x", 0) * W, y = num(w, "y", 0) * H;
+                float x = num(w, "x", 0) * W, y = top + num(w, "y", 0) * safeH;
                 switch (type) {
                     case "panel" -> {
                         float[] bg = col(w, "bg");
@@ -935,7 +941,9 @@ public final class MainActivity extends Activity implements ClientSession.Listen
         void tapWidget(float fx, float fy) {
             if (layoutWidgets.isEmpty()) return;
             float W = getWidth(), H = getHeight();
-            float px = fx * W, py = fy * H;
+            float top = hostUiTopInset();
+            float safeH = Math.max(1f, H - top);
+            float px = fx * W, py = top + fy * safeH;
             for (Map<String, Object> w : layoutWidgets) {
                 if (!"button".equals(str(w, "type", ""))) continue;
                 float x0 = num(w, "x", 0) * W, y0 = num(w, "y", 0) * H;
