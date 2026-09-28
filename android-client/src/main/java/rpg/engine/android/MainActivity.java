@@ -882,12 +882,12 @@ public final class MainActivity extends Activity implements ClientSession.Listen
                         if (bg != null) {
                             p.setStyle(Paint.Style.FILL);
                             p.setColor(argb(bg, bg.length > 3 ? bg[3] : 1f));
-                            c.drawRoundRect(x, y, x + num(w, "w", 0) * W, y + num(w, "h", 0) * H,
+                            c.drawRoundRect(x, y, x + num(w, "w", 0) * W, y + num(w, "h", 0) * safeH,
                                     dp(4), dp(4), p);
                         }
                     }
                     case "bar" -> {
-                        float ww = num(w, "w", 0.2f) * W, hh = num(w, "h", 0.04f) * H;
+                        float ww = num(w, "w", 0.2f) * W, hh = num(w, "h", 0.04f) * safeH;
                         float frac = num(w, "max", 1) > 0
                                 ? Math.max(0, Math.min(1, num(w, "value", 0) / num(w, "max", 1))) : 0;
                         p.setStyle(Paint.Style.FILL);
@@ -912,7 +912,7 @@ public final class MainActivity extends Activity implements ClientSession.Listen
                         c.drawText(s, x, y + p.getTextSize(), p);
                     }
                     case "button" -> {
-                        float ww = num(w, "w", 0.1f) * W, hh = num(w, "h", 0.05f) * H;
+                        float ww = num(w, "w", 0.1f) * W, hh = num(w, "h", 0.05f) * safeH;
                         p.setStyle(Paint.Style.FILL);
                         p.setColor(0xE01F2429);
                         c.drawRoundRect(x, y, x + ww, y + hh, dp(3), dp(3), p);
@@ -946,8 +946,8 @@ public final class MainActivity extends Activity implements ClientSession.Listen
             float px = fx * W, py = top + fy * safeH;
             for (Map<String, Object> w : layoutWidgets) {
                 if (!"button".equals(str(w, "type", ""))) continue;
-                float x0 = num(w, "x", 0) * W, y0 = num(w, "y", 0) * H;
-                float w0 = num(w, "w", 0) * W, h0 = num(w, "h", 0) * H;
+                float x0 = num(w, "x", 0) * W, y0 = top + num(w, "y", 0) * safeH;
+                float w0 = num(w, "w", 0) * W, h0 = num(w, "h", 0) * safeH;
                 if (px >= x0 && px <= x0 + w0 && py >= y0 && py <= y0 + h0) {
                     MainActivity.this.handleWidgetCommand((int) num(w, "cmd", -1), str(w, "value", ""));
                     return;
