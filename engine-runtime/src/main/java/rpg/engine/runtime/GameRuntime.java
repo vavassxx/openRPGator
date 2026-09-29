@@ -4,6 +4,7 @@ import rpg.engine.map.*;
 import rpg.engine.world.GameWorld;
 import rpg.engine.script.lua.LuaRuntime;
 import rpg.engine.script.UiSink;
+import rpg.engine.script.PlayerStore;
 import rpg.engine.core.ecs.EntityId;
 import java.io.ByteArrayOutputStream;
 import java.io.FileInputStream;
@@ -25,6 +26,7 @@ public final class GameRuntime {
     public RMap map() { return map; }
 
     public void setUiSink(UiSink sink) { scripts.api().setUiSink(sink); }
+    public void setPlayerStore(PlayerStore store) { scripts.api().setPlayerStore(store); }
 
     /** Host-owned: tells the script layer which entity ids are live players this tick. */
     public void setPlayers(java.util.Collection<Long> playerIds) { scripts.api().setPlayers(playerIds); }
@@ -43,6 +45,11 @@ public final class GameRuntime {
     /** Thread-safe: queues a semantic client action for the next tick. */
     public void dispatchAction(long playerEntityId, String action) {
         pendingActions.add(() -> scripts.api().dispatchAction(playerEntityId, action));
+    }
+
+    /** Thread-safe: queues a player disconnect hook before the host destroys the player entity. */
+    public void dispatchDisconnect(long playerEntityId) {
+        pendingActions.add(() -> scripts.api().dispatchDisconnect(playerEntityId));
     }
 
     public void loadMap(Path path) throws IOException {

@@ -11,6 +11,7 @@ import rpg.engine.core.component.Name;
 import rpg.engine.core.math.WorldPosition;
 import rpg.engine.map.RMap;
 import rpg.engine.script.UiSink;
+import rpg.engine.script.PlayerStore;
 import rpg.engine.world.GameWorld;
 import rpg.engine.world.TriggerEnterEvent;
 import rpg.engine.world.TriggerExitEvent;
@@ -34,6 +35,7 @@ public final class LuaApi {
     private volatile RMap map;
     private volatile long tick;
     private volatile UiSink uiSink;
+    private volatile PlayerStore playerStore;
     private String version = "0.4.0";
 
     private final Map<EntityId, List<LuaFunction>> tickHandlers = new LinkedHashMap<>();
@@ -43,6 +45,7 @@ public final class LuaApi {
     private final List<LuaFunction> globalTickHandlers = new ArrayList<>();
     private final List<LuaFunction> commandHandlers = new ArrayList<>();
     private final List<LuaFunction> actionHandlers = new ArrayList<>();
+    private final List<LuaFunction> disconnectHandlers = new ArrayList<>();
 
     private final AtomicLong dialogIds = new AtomicLong();
     private final Map<Long, LuaFunction> dialogCallbacks = new ConcurrentHashMap<>();
@@ -71,6 +74,7 @@ public final class LuaApi {
     public void setTick(long tick) { this.tick = tick; }
     public void setVersion(String version) { this.version = version; }
     public void setUiSink(UiSink sink) { this.uiSink = sink; }
+    public void setPlayerStore(PlayerStore store) { this.playerStore = store; }
 
     public void install(Globals globals) {
         LuaTable engine = new LuaTable();
@@ -78,10 +82,42 @@ public final class LuaApi {
         engine.set("tick", new ZeroArgFunction() { public LuaValue call() { return valueOf(tick); }});
         engine.set("log", new OneArgFunction() { public LuaValue call(LuaValue value) { System.out.println("[Lua] " + value.tojstring()); return NONE; }});
         engine.set("on_tick", new OneArgFunction() { public LuaValue call(LuaValue fn) { register(globalTickHandlers, null, fn); return NONE; }});
-        engine.set("notify", new OneArgFunction() {
-            public LuaValue call(LuaValue text) {
-                if (uiSink != null) uiSink.broadcastNotify(text.optjstring(""));
+        engine.set("notify", new ArgsLib() {
+            public LuaValue callImpl(Varargs args) {
+                if (uiSink == null || args.narg() == 0) return NONE;
+                if (args.narg() == 1) {
+                    uiSink.broadcastNotify(args.arg1().optjstring(""));
+                } else {
+                    long targetId = targetIdOf(args.arg(1));
+                    if (targetId != -1) uiSink.notifyTo(targetId, args.arg(2).optjstring(""));
+                }
                 return NONE;
+            }
+        });
+        engine.set("save_player", new ArgsLib() {
+            public LuaValue callImpl(Varargs args) {
+                if (playerStore == null || args.narg() < 2) return NONE;
+                long id = targetIdOf(args.arg(1));
+                if (id == -1 || world == null) return NONE;
+                String key = playerKey(id);
+                if (key == null) return NONE;
+                playerStore.save(key, toJson(args.arg(2)));
+                return NONE;
+            }
+        });
+        engine.set("load_player", new OneArgFunction() {
+            public LuaValue call(LuaValue target) {
+                if (playerStore == null || world == null) return NIL;
+                long id = targetIdOf(target);
+                if (id == -1) return NIL;
+                String key = playerKey(id);
+                if (key == null) return NIL;
+                String json = playerStore.load(key);
+                if (json == null || json.isBlank()) return NIL;
+                try { return fromJson(json); } catch (RuntimeException ex) {
+                    System.err.println("[Lua] invalid player save for " + key + ": " + ex.getMessage());
+                    return NIL;
+                }
             }
         });
         engine.set("dialog", new ArgsLib() {
@@ -134,6 +170,12 @@ public final class LuaApi {
         engine.set("on_action", new OneArgFunction() {
             public LuaValue call(LuaValue fn) {
                 if (fn.isfunction()) actionHandlers.add((LuaFunction) fn);
+                return NONE;
+            }
+        });
+        engine.set("on_disconnect", new OneArgFunction() {
+            public LuaValue call(LuaValue fn) {
+                if (fn.isfunction()) disconnectHandlers.add((LuaFunction) fn);
                 return NONE;
             }
         });
@@ -199,6 +241,12 @@ public final class LuaApi {
             LuaValue me = entityFacade(id);
             for (LuaFunction fn : List.copyOf(e.getValue())) safeCall("on_tick", fn, me);
         }
+    }
+
+    public void dispatchDisconnect(long playerEntityId) {
+        if (world == null) return;
+        LuaValue me = entityFacade(new EntityId(playerEntityId));
+        for (LuaFunction fn : List.copyOf(disconnectHandlers)) safeCall("on_disconnect", fn, me);
     }
 
     public void dispatchEnter(EntityId actor, EntityId trigger) { dispatchTo(enterHandlers, "on_enter", actor, trigger); }
@@ -320,6 +368,11 @@ public final class LuaApi {
     private EntityId parseId(String raw) {
         try { return new EntityId(Long.parseLong(raw.trim())); } catch (Exception ignored) { }
         return findId(raw);
+    }
+
+    private String playerKey(long id) {
+        if (world == null) return null;
+        return world.entities().get(new EntityId(id), Name.class).map(Name::value).orElse(null);
     }
 
     /** Extracts the entity id from a facade table (calls {@code facade.id()}) or a raw number. */
@@ -462,6 +515,29 @@ public final class LuaApi {
             }
         }
         return sb.append('"').toString();
+    }
+
+    private LuaValue fromJson(String json) {
+        return new JsonLuaParser(json).parse();
+    }
+
+    private static final class JsonLuaParser {
+        final String s; int i;
+        JsonLuaParser(String s) { this.s = s; }
+        LuaValue parse() { skip(); LuaValue v = value(); skip(); if (i != s.length()) throw new IllegalArgumentException("trailing JSON"); return v; }
+        void skip() { while (i < s.length() && Character.isWhitespace(s.charAt(i))) i++; }
+        LuaValue value() {
+            skip(); if (i >= s.length()) throw new IllegalArgumentException("unexpected end");
+            char c=s.charAt(i);
+            if(c=='{') return object(); if(c=='[') return array(); if(c=='\"') return LuaValue.valueOf(string());
+            if(s.startsWith("true",i)){i+=4;return TRUE;} if(s.startsWith("false",i)){i+=5;return FALSE;} if(s.startsWith("null",i)){i+=4;return NIL;}
+            return LuaValue.valueOf(number());
+        }
+        LuaValue object(){ i++; LuaTable t=new LuaTable(); skip(); if(i<s.length()&&s.charAt(i)=='}'){i++;return t;} int n=0; while(true){ skip(); String k=string(); skip(); expect(':'); LuaValue v=value(); t.set(k,v); n++; skip(); if(i<s.length()&&s.charAt(i)=='}'){i++;return t;} expect(','); } }
+        LuaValue array(){ i++; LuaTable t=new LuaTable(); skip(); if(i<s.length()&&s.charAt(i)==']'){i++;return t;} int n=1; while(true){ t.set(n++,value()); skip(); if(i<s.length()&&s.charAt(i)==']'){i++;return t;} expect(','); } }
+        void expect(char c){ skip(); if(i>=s.length()||s.charAt(i)!=c) throw new IllegalArgumentException("expected '"+c+"'"); i++; }
+        String string(){ expect('\"'); StringBuilder b=new StringBuilder(); while(i<s.length()){ char c=s.charAt(i++); if(c=='\"') return b.toString(); if(c=='\\'){ if(i>=s.length()) throw new IllegalArgumentException("bad escape"); char e=s.charAt(i++); switch(e){case '"'->b.append('"');case '\\'->b.append('\\');case '/'->b.append('/');case 'n'->b.append('\n');case 'r'->b.append('\r');case 't'->b.append('\t');case 'b'->b.append('\b');case 'f'->b.append('\f');case 'u'->{if(i+4>s.length())throw new IllegalArgumentException("bad unicode");b.append((char)Integer.parseInt(s.substring(i,i+4),16));i+=4;}default->throw new IllegalArgumentException("bad escape");}} else b.append(c); } throw new IllegalArgumentException("unterminated string"); }
+        double number(){ int st=i; while(i<s.length() && "-+.eE0123456789".indexOf(s.charAt(i))>=0)i++; return Double.parseDouble(s.substring(st,i)); }
     }
 
     /**

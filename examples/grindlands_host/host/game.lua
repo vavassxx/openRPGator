@@ -17,6 +17,7 @@ G.commands = {
     CLOSE_SCREEN = 9003,
     OPEN_CHARACTER = 9004,
     BUY_WEAPON = 9005,
+    SORT_INVENTORY = 9006,
 }
 
 G.config = {
@@ -119,28 +120,50 @@ function G.player(pid)
     return G.players[pid]
 end
 
+function G.notify(player, text)
+    engine.notify(player, text)
+end
+
+function G.savePlayer(player, p)
+    local pos = player.position()
+    engine.save_player(player, {
+        hp=p.hp, maxHp=p.maxHp, level=p.level, xp=p.xp, gold=p.gold, weapon=p.weapon,
+        inventory=p.inventory, resources=p.resources, position={x=pos.x,y=pos.y,z=pos.z},
+    })
+end
+
 function G.ensurePlayer(player)
     local pid = player.id()
     local p = G.players[pid]
     if p then return p end
 
     p = {
-        hp = G.config.player.maxHp,
-        maxHp = G.config.player.maxHp,
-        level = 1,
-        xp = 0,
-        gold = 0,
-        weapon = "fists",
-        inventory = {},
-        resources = { ore=0, herb=0, wood=0 },
-        attackCooldownUntil = 0,
-        alive = true,
-        respawnAt = 0,
-        screen = "hud",
+        hp = G.config.player.maxHp, maxHp = G.config.player.maxHp, level = 1, xp = 0, gold = 0,
+        weapon = "fists", inventory = {}, resources = { ore=0, herb=0, wood=0 },
+        attackCooldownUntil = 0, alive = true, respawnAt = 0, screen = "hud", inventorySort = "all",
     }
+
+    local saved = engine.load_player(player)
+    if saved and saved.level then
+        p.hp = tonumber(saved.hp) or p.hp
+        p.maxHp = tonumber(saved.maxHp) or p.maxHp
+        p.level = tonumber(saved.level) or p.level
+        p.xp = tonumber(saved.xp) or p.xp
+        p.gold = tonumber(saved.gold) or p.gold
+        p.weapon = saved.weapon or p.weapon
+        p.inventory = saved.inventory or p.inventory
+        p.resources = saved.resources or p.resources
+        if saved.position then
+            player.set_position(tonumber(saved.position.x) or G.config.spawn.x,
+                tonumber(saved.position.y) or G.config.spawn.y, tonumber(saved.position.z) or 0)
+        else
+            player.set_position(G.config.spawn.x, G.config.spawn.y)
+        end
+        G.notify(player, "Сохранение загружено.")
+    else
+        G.notify(player, "Добро пожаловать! Кулаки уже наносят урон. Собирай монеты или ресурсы, продавай их торговцу и покупай оружие.")
+    end
     G.players[pid] = p
-    player.set_position(G.config.spawn.x, G.config.spawn.y)
-    engine.notify("Добро пожаловать! Кулаки уже наносят урон. Собирай монеты или ресурсы, продавай их торговцу и покупай оружие.")
     return p
 end
 
@@ -180,7 +203,7 @@ function G.addXp(player, p, amount)
         p.level = p.level + 1
         p.maxHp = G.maxHpForLevel(p.level)
         p.hp = p.maxHp
-        engine.notify(player.name() .. " достиг уровня " .. p.level ..
+        G.notify(player, player.name() .. " достиг уровня " .. p.level ..
             "! Макс. HP: " .. p.maxHp)
     end
 end
@@ -191,7 +214,7 @@ function G.dropLoot(player, p, mobType)
     for _, drop in ipairs(tableForMob) do
         if math.random() < drop[2] then
             G.addItem(p, drop[1])
-            engine.notify("Получен предмет: " .. G.itemName(drop[1]))
+            G.notify(player, "Получен предмет: " .. G.itemName(drop[1]))
         end
     end
 end
@@ -201,15 +224,16 @@ function G.buyWeapon(player, p, id)
     local price = G.weaponPrices[id]
     if not weapon or not price then return end
     if p.gold < price then
-        engine.notify("Торговец: нужно " .. price .. " золота, а у тебя " .. p.gold .. ".")
+        G.notify(player, "Торговец: нужно " .. price .. " золота, а у тебя " .. p.gold .. ".")
         return
     end
     p.gold = p.gold - price
     G.addItem(p, id)
     G.useItem(player, p, id)
+    G.savePlayer(player, p)
     p.screen = "hud"
     G.hud(player, p)
-    engine.notify("Куплено: " .. weapon.name .. " за " .. price .. " золота.")
+    G.notify(player, "Куплено: " .. weapon.name .. " за " .. price .. " золота.")
 end
 
 function G.useItem(player, p, id)
@@ -220,7 +244,7 @@ function G.useItem(player, p, id)
         if p.weapon ~= "fists" then G.addItem(p, p.weapon) end
         G.removeItem(p, id)
         p.weapon = id
-        engine.notify("Экипировано: " .. weapon.name .. " (+" .. weapon.dmg .. ")")
+        G.notify(player, "Экипировано: " .. weapon.name .. " (+" .. weapon.dmg .. ")")
         return
     end
 
@@ -231,10 +255,10 @@ function G.useItem(player, p, id)
         G.removeItem(p, id)
         local old = p.hp
         p.hp = math.min(p.maxHp, p.hp + item.amount)
-        engine.notify(G.itemName(id) .. ": +" .. math.floor(p.hp - old) .. " HP")
+        G.notify(player, G.itemName(id) .. ": +" .. math.floor(p.hp - old) .. " HP")
     elseif item.kind == "noop" then
         G.removeItem(p, id)
-        engine.notify("Зелье маны выпито. Мана пока не используется.")
+        G.notify(player, "Зелье маны выпито. Мана пока не используется.")
     end
 end
 
@@ -283,7 +307,8 @@ function G.attackMob(player, mobId)
         G.addXp(player, p, m.xp)
         p.gold = p.gold + m.gold
         G.dropLoot(player, p, m.type)
-        engine.notify("Побеждён " .. m.type .. ": +" .. m.xp .. " XP, +" .. m.gold .. " золота")
+        G.savePlayer(player, p)
+        G.notify(player, "Побеждён " .. m.type .. ": +" .. m.xp .. " XP, +" .. m.gold .. " золота")
     end
     return true
 end
@@ -330,23 +355,53 @@ function G.hud(player, p)
     engine.layout(player, layout, strings)
 end
 
+function G.inventoryKind(id)
+    if G.weapons[id] then return "Оружие" end
+    if G.items[id] then return "Расходники" end
+    return "Прочее"
+end
+
 function G.inventoryLayout(player, p)
-    local strings = {"Инвентарь", "Закрыть"}
+    local strings = {"Инвентарь", "Закрыть", "Все", "Оружие", "Расходники"}
     local layout = {
-        {type="panel",x=.18,y=.12,w=.64,h=.72,bg={.02,.03,.04,.94}},
-        {type="text",x=.22,y=.15,ref=0,size=18,color={1,.85,.4}},
-        {type="button",x=.70,y=.15,w=.09,h=.045,ref=1,cmd=G.commands.CLOSE_SCREEN},
+        {type="panel",x=.08,y=.09,w=.84,h=.80,bg={.02,.03,.04,.95}},
+        {type="text",x=.12,y=.12,ref=0,size=18,color={1,.85,.4}},
+        {type="button",x=.79,y=.115,w=.09,h=.045,ref=1,cmd=G.commands.CLOSE_SCREEN},
+        {type="button",x=.12,y=.185,w=.18,h=.045,ref=2,cmd=G.commands.SORT_INVENTORY,value="all"},
+        {type="button",x=.32,y=.185,w=.18,h=.045,ref=3,cmd=G.commands.SORT_INVENTORY,value="weapon"},
+        {type="button",x=.52,y=.185,w=.18,h=.045,ref=4,cmd=G.commands.SORT_INVENTORY,value="consumable"},
     }
-    local y = .22
+
+    local filtered = {}
     for _, id in ipairs(p.inventory) do
-        table.insert(strings, G.itemName(id))
-        table.insert(layout, {type="button",x=.23,y=y,w=.54,h=.045,ref=#strings-1,cmd=G.commands.USE_ITEM,value=id})
-        y = y + .052
-        if y > .78 then break end
+        local kind = G.inventoryKind(id)
+        local ok = p.inventorySort == "all"
+            or (p.inventorySort == "weapon" and kind == "Оружие")
+            or (p.inventorySort == "consumable" and kind == "Расходники")
+        if ok then table.insert(filtered, id) end
     end
-    if #p.inventory == 0 then
-        table.insert(strings, "Инвентарь пуст")
-        table.insert(layout, {type="text",x=.23,y=.24,ref=#strings-1,size=13,color={.8,.8,.8}})
+    table.sort(filtered, function(a,b)
+        local ka,kb=G.inventoryKind(a),G.inventoryKind(b)
+        if ka ~= kb then return ka < kb end
+        return G.itemName(a) < G.itemName(b)
+    end)
+
+    local cols, cellW, cellH = 4, .18, .115
+    local startX, startY = .12, .27
+    for i, id in ipairs(filtered) do
+        local n = i - 1
+        local col, row = n % cols, math.floor(n / cols)
+        if row >= 4 then break end
+        table.insert(strings, G.itemName(id))
+        local ref = #strings - 1
+        table.insert(layout, {
+            type="button", x=startX + col*.20, y=startY + row*.135,
+            w=cellW, h=cellH, ref=ref, cmd=G.commands.USE_ITEM, value=id
+        })
+    end
+    if #filtered == 0 then
+        table.insert(strings, p.inventorySort == "all" and "Инвентарь пуст" or "В этой категории ничего нет")
+        table.insert(layout, {type="text",x=.15,y=.34,ref=#strings-1,size=13,color={.8,.8,.8}})
     end
     engine.layout(player, layout, strings)
 end
@@ -388,6 +443,7 @@ function G.handleCommand(player, code, arg)
         G.buyWeapon(player, p, arg)
     elseif code == G.commands.USE_ITEM then
         G.useItem(player, p, arg)
+        G.savePlayer(player, p)
         p.screen = "inventory"
         G.inventoryLayout(player, p)
     elseif code == G.commands.OPEN_INVENTORY then
@@ -396,6 +452,9 @@ function G.handleCommand(player, code, arg)
     elseif code == G.commands.OPEN_CHARACTER then
         p.screen = "character"
         G.characterLayout(player, p)
+    elseif code == G.commands.SORT_INVENTORY then
+        p.inventorySort = arg or "all"
+        G.inventoryLayout(player, p)
     elseif code == G.commands.CLOSE_SCREEN then
         p.screen = "hud"
         G.resetScreen(player, p)
@@ -421,6 +480,7 @@ function G.updatePlayers(now)
             p.alive = false
             local lost = math.floor(p.gold * .10)
             p.gold = p.gold - lost
+            G.savePlayer(player, p)
             p.respawnAt = now + G.config.respawnSeconds * G.tickRate
             -- Смерть немедленно сбрасывает агро всех мобов, которые держали этого игрока.
             for _, m in pairs(G.mobs) do
@@ -429,16 +489,19 @@ function G.updatePlayers(now)
                     m.attackAt = 0
                 end
             end
-            engine.notify(player.name() .. " пал! Потеряно " .. lost ..
+            G.notify(player, player.name() .. " пал! Потеряно " .. lost ..
                 " золота. Возрождение через " .. G.config.respawnSeconds .. " сек.")
         end
 
         if not p.alive and now >= p.respawnAt then
             p.alive = true
             p.hp = math.floor(p.maxHp * .5)
+            G.savePlayer(player, p)
             player.set_position(G.config.spawn.x, G.config.spawn.y)
-            engine.notify(player.name() .. " возродился в городе.")
+            G.notify(player, player.name() .. " возродился в городе.")
         end
+
+        if now % 100 == 0 then G.savePlayer(player, p) end
 
         if not G.uiSent[pid] then
             engine.send_script(player, [[
@@ -565,6 +628,15 @@ engine.on_tick(function(now)
     updateMobs(now)
     updateResources(now)
     updateCoins(now)
+end)
+
+engine.on_disconnect(function(player)
+    local p = G.players[player.id()]
+    if p then
+        G.savePlayer(player, p)
+        G.players[player.id()] = nil
+        G.uiSent[player.id()] = nil
+    end
 end)
 
 engine.on_action(function(player, action)

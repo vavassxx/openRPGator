@@ -54,6 +54,6 @@ public final class ServerConfig {
         }
 
         List<Path> paks = DataDir.listIn(hostDir, ".pak");
-        return new ServerHost.Config(map, paks, port, tickHz);
+        return new ServerHost.Config(map, paks, port, tickHz, dataDir);
     }
 }

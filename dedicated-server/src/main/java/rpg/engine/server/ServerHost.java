@@ -32,7 +32,7 @@ public final class ServerHost {
      * @param tickHz world tick rate in Hz (≡ 1000/tickHz ms per tick); 0 or negative falls back to
      *               the {@link ServerConfig#DEFAULT_TICK_HZ default}, always clamped to 1..240
      */
-    public record Config(Path map, List<Path> paks, int port, int tickHz) {
+    public record Config(Path map, List<Path> paks, int port, int tickHz, Path dataDir) {
         public Config {
             if (paks == null) paks = List.of();
             if (tickHz <= 0) tickHz = ServerConfig.DEFAULT_TICK_HZ;
@@ -80,6 +80,7 @@ public final class ServerHost {
         if (running) return;
         runtime = new GameRuntime();
         runtime.setUiSink(uiSink());
+        if (cfg.dataDir() != null) runtime.setPlayerStore(new FilePlayerStore(cfg.dataDir().resolve("players")));
         pakFiles = List.copyOf(cfg.paks());
 
         if (cfg.map() != null && Files.isRegularFile(cfg.map())) {
@@ -131,6 +132,9 @@ public final class ServerHost {
         try { if (server != null) server.close(); } catch (IOException ignored) {}
         exec.shutdownNow();
         if (tick != null) tick.shutdown();
+        synchronized (worldLock) {
+            for (Long id : new ArrayList<>(clients.keySet())) runtime.scripts().api().dispatchDisconnect(id);
+        }
         clients.clear();
         listener.log("Server stopped");
     }
@@ -183,7 +187,10 @@ public final class ServerHost {
             if (client != null) {
                 clients.remove(client.entityId);
                 client.dismiss();
-                destroyPlayer(client.entityId);
+                synchronized (worldLock) {
+                    runtime.scripts().api().dispatchDisconnect(client.entityId);
+                    destroyPlayer(client.entityId);
+                }
             }
         }
     }
