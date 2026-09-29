@@ -162,6 +162,7 @@ public final class ServerHost {
             client = new Client(entityId, s, out);
             if (!pakFiles.isEmpty()) PakStreamer.send(out, pakFiles);
             Protocol.write(out, new Welcome(entityId));
+            sendFonts(out, cfg.map());
             // Register only after Welcome: the tick thread broadcasts snapshots to every client,
             // so a client must not be reachable before its handshake has completed.
             clients.put(entityId, client);
@@ -199,8 +200,9 @@ public final class ServerHost {
         synchronized (worldLock) {
             Long id = runtime.world().spawn().value();
             runtime.world().entities().set(new EntityId(id), new Name(name));
-            runtime.world().entities().set(new EntityId(id),
-                    new Transform(new WorldPosition(0, 0, 0), 0));
+            WorldPosition spawn = runtime.scripts().api().spawnPoint();
+            runtime.world().entities().set(new EntityId(id), new Transform(spawn, 0));
+            runtime.world().entities().set(new EntityId(id), new CircleCollider(0.35));
             return id;
         }
     }
@@ -273,6 +275,23 @@ public final class ServerHost {
     }
 
     /** The authoritative ground layer to stream on connect; null if the host has no map. */
+
+    private void sendFonts(OutputStream out, Path map) {
+        if (map == null || map.getParent() == null) return;
+        Path dir = map.getParent().resolve("fonts");
+        if (!Files.isDirectory(dir)) return;
+        try (var paths = Files.list(dir)) {
+            for (Path p : paths.filter(Files::isRegularFile).sorted().toList()) {
+                String n = p.getFileName().toString();
+                String lower = n.toLowerCase(Locale.ROOT);
+                if (!(lower.endsWith(".ttf") || lower.endsWith(".otf"))) continue;
+                byte[] data = Files.readAllBytes(p);
+                if (data.length > (1 << 19)) { listener.error("Font too large, skipped: " + n); continue; }
+                Protocol.write(out, new Font(n, data));
+            }
+        } catch (IOException e) { listener.error("Font streaming failed: " + e.getMessage()); }
+    }
+
     private MapPacket mapPacket() {
         if (runtime == null || runtime.map() == null || runtime.map().layers().isEmpty()) return null;
         var ground = runtime.map().layers().get(0);

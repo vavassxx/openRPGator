@@ -641,7 +641,8 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
                     String s = wt.ref() >= 0 && wt.ref() < hudStrings.size() ? hudStrings.get(wt.ref()) : "";
                     if (!s.isEmpty()) {
                         float[] col = wt.color() != null ? wt.color() : new float[]{1, 1, 1};
-                        renderer.text(px, py, s, Math.max(1, wt.size()), col[0], col[1], col[2]);
+                        if (!wt.font().isEmpty()) renderer.textWithFont(wt.font(), px, py, s, Math.max(1, wt.size()), col[0], col[1], col[2]);
+                        else renderer.text(px, py, s, Math.max(1, wt.size()), col[0], col[1], col[2]);
                     }
                 }
                 case "button" -> {
@@ -658,8 +659,9 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
                     String label = wt.ref() >= 0 && wt.ref() < hudStrings.size() ? hudStrings.get(wt.ref())
                             : (wt.payload() != null && !wt.payload().isEmpty() ? wt.payload() : "");
                     if (!label.isEmpty()) {
-                        double tw = renderer.textWidth(label, 1);
-                        renderer.text(px + (pw - tw) / 2, py + (ph - 8) / 2, label, 1, 0.9f, 0.95f, 0.9f);
+                        double tw = wt.font().isEmpty() ? renderer.textWidth(label, 1) : renderer.textWidthWithFont(wt.font(), label, 1);
+                        if (wt.font().isEmpty()) renderer.text(px + (pw - tw) / 2, py + (ph - 8) / 2, label, 1, 0.9f, 0.95f, 0.9f);
+                        else renderer.textWithFont(wt.font(), px + (pw - tw) / 2, py + (ph - 8) / 2, label, 1, 0.9f, 0.95f, 0.9f);
                     }
                 }
                 default -> { }
@@ -687,7 +689,7 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
     /** Widget descriptor parsed from the host layout schema (see {@code UiLayout.layout}). */
     private record UiWidget(String type, double x, double y, double w, double h,
                             double value, double max, int ref, int size, float[] color, float[] back, float[] bg,
-                            int cmd, String payload) {
+                            int cmd, String payload, String font) {
         static UiWidget of(Map<String, Object> m) {
             float[] fill = col(m, "color");
             if (fill == null) fill = col(m, "fill"); // bars from the Lua layout use "fill"
@@ -695,7 +697,7 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
                     num(m, "value", 0), num(m, "max", 1), (int) num(m, "ref", -1),
                     Math.max(1, (int) Math.ceil(num(m, "size", 12) / 8.0)), // 5×7 font ≈ 8px per scale
                     fill, col(m, "back"), col(m, "bg"),
-                    (int) num(m, "cmd", -1), str(m, "value"));
+                    (int) num(m, "cmd", -1), str(m, "value"), str(m, "font"));
         }
         private static double num(Map<String, Object> m, String k, double dflt) {
             Object v = m.get(k);
@@ -836,6 +838,11 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
 
     @Override public void onSnapshot(Snapshot s) { latestSnapshot.set(s); }
     @Override public void onMap(MapPacket m) { netMap = m; }
+    @Override public void onFont(Font f) {
+        try { renderer.setUiFont(f.name(), f.data()); }
+        catch (RuntimeException e) { System.err.println("Font load failed: " + f.name() + ": " + e.getMessage()); }
+    }
+
     @Override public void onScript(Script s) {
         if (clientScript.load(s.name(), s.source()))
             addToast("UI script: " + s.name());

@@ -21,6 +21,7 @@ final class DesktopClientSession {
         void onUi(UiLayout u);
         void onMap(MapPacket m);
         void onScript(Script s);
+        void onFont(Font f);
         void onStatus(String s);
         void onPakStart(long totalBytes);            // total pak bytes expected (0 = none)
         void onPakProgress(long received, long totalBytes);
@@ -89,6 +90,7 @@ final class DesktopClientSession {
                         case UiLayout u -> listener.onUi(u);
                         case MapPacket m -> listener.onMap(m);
                         case Script sc -> listener.onScript(sc);
+                        case Font f -> listener.onFont(f);
                         // legacy push-UI packets, kept for compatibility with older servers
                         case Notify n -> listener.onUi(UiLayout.notify(n.text()));
                         case Dialog d -> listener.onUi(UiLayout.dialog(d.dialogId(), d.text(), d.choices()));

@@ -32,6 +32,7 @@ local state = {
 }
 G.mobs[id] = state
 entity.set_trigger(2.0)
+entity.set_collider_circle(0.35)
 
 entity.on_interact(function(player)
     -- INTERACT remains a compatibility fallback for desktop/mobile interaction.

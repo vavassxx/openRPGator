@@ -31,6 +31,8 @@ G.config = {
     combat = { range = 2.0, cooldownTicks = 8, baseDamage = 5 },
 }
 
+engine.set_spawn_point(G.config.spawn.x, G.config.spawn.y, 0)
+
 G.weapons = {
     fists  = { name="Кулаки", dmg=0 },
     knife  = { name="Нож", dmg=3 },
@@ -153,7 +155,7 @@ function G.ensurePlayer(player)
         p.weapon = saved.weapon or p.weapon
         p.inventory = saved.inventory or p.inventory
         p.resources = saved.resources or p.resources
-        if saved.position then
+        if saved.position and not (tonumber(saved.position.x) == 0 and tonumber(saved.position.y) == 0) then
             player.set_position(tonumber(saved.position.x) or G.config.spawn.x,
                 tonumber(saved.position.y) or G.config.spawn.y, tonumber(saved.position.z) or 0)
         else
@@ -321,6 +323,8 @@ function G.hud(player, p)
         "Ур. " .. p.level,
         "Золото: " .. p.gold,
         weapon.name,
+        "Инвентарь",
+        "Персонаж",
     }
     local layout = {
         {type="panel",x=.01,y=.01,w=.47,h=.115,bg={0,0,0,.70}},
@@ -352,6 +356,9 @@ function G.hud(player, p)
         table.insert(layout, {type="text",x=.545,y=.166,ref=targetHpRef,size=9,color={1,1,1}})
     end
 
+    for _, widget in ipairs(layout) do
+        if widget.type == "text" or widget.type == "button" then widget.font = "GoogleSans-Regular.ttf" end
+    end
     engine.layout(player, layout, strings)
 end
 
@@ -403,6 +410,9 @@ function G.inventoryLayout(player, p)
         table.insert(strings, p.inventorySort == "all" and "Инвентарь пуст" or "В этой категории ничего нет")
         table.insert(layout, {type="text",x=.15,y=.34,ref=#strings-1,size=13,color={.8,.8,.8}})
     end
+    for _, widget in ipairs(layout) do
+        if widget.type == "text" or widget.type == "button" then widget.font = "GoogleSans-Regular.ttf" end
+    end
     engine.layout(player, layout, strings)
 end
 
@@ -428,6 +438,9 @@ function G.characterLayout(player, p)
     for i=3,#strings do
         table.insert(layout,{type="text",x=.28,y=y,ref=i-1,size=13,color={.88,.88,.9}})
         y=y+.043
+    end
+    for _, widget in ipairs(layout) do
+        if widget.type == "text" or widget.type == "button" then widget.font = "GoogleSans-Regular.ttf" end
     end
     engine.layout(player,layout,strings)
 end
@@ -584,13 +597,13 @@ local function updateMobs(now)
                         m.attackAt = now + m.atkcd
                     end
                 elseif d > 0 then
-                    me.set_position(pos.x + dx/d*m.speed, pos.y + dy/d*m.speed)
+                    me.move(dx/d*m.speed, dy/d*m.speed)
                 end
             else
                 local dx, dy = m.homeX-pos.x, m.homeY-pos.y
                 local d = math.sqrt(dx*dx + dy*dy)
                 if d > .5 then
-                    me.set_position(pos.x + dx/d*m.speed*.6, pos.y + dy/d*m.speed*.6)
+                    me.move(dx/d*m.speed*.6, dy/d*m.speed*.6)
                 end
             end
         end

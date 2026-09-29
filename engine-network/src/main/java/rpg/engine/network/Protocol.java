@@ -22,6 +22,7 @@ import java.util.List;
  *   11 Script(name, source) — client-side Lua UI script pushed by the host
  *   12 Cmd(code, arg) — custom command (client ↔ server; value chosen by the host)
  *   14 MapPacket(width, height, tiles) — authoritative ground layer pushed after Welcome
+ *   15 Font(name, bytes) — server-pushed TTF/OTF for custom UI
  */
 public final class Protocol {
     private static final int MAX_FRAME_SIZE = 1 << 20;
@@ -81,6 +82,10 @@ public final class Protocol {
             data.writeInt(p.height());
             data.writeInt(p.tiles().length);
             for (int t : p.tiles()) data.writeInt(t);
+        } else if (packet instanceof Font p) {
+            writeString(data, p.name());
+            data.writeInt(p.data().length);
+            data.write(p.data());
         } else {
             throw new IOException("Unsupported packet: " + packet.getClass());
         }
@@ -111,6 +116,7 @@ public final class Protocol {
             case 11 -> { return new Script(readString(data), readString(data)); }
             case 12 -> { return new Cmd(data.readInt(), readString(data)); }
             case 14 -> { return readMap(data); }
+            case 15 -> { return new Font(readString(data), readBytes(data, MAX_FRAME_SIZE - 256)); }
             default -> throw new IOException("Unknown packet type");
         }
     }
@@ -141,6 +147,14 @@ public final class Protocol {
         byte[] data = new byte[len];
         in.readFully(data);
         return new PakChunk(name, offset, data);
+    }
+
+    private static byte[] readBytes(DataInputStream in, int max) throws IOException {
+        int n = in.readInt();
+        if (n < 0 || n > max) throw new IOException("Invalid binary resource length: " + n);
+        byte[] data = new byte[n];
+        in.readFully(data);
+        return data;
     }
 
     private static MapPacket readMap(DataInputStream in) throws IOException {

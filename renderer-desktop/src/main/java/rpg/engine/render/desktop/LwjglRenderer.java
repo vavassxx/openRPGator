@@ -13,6 +13,12 @@ import static org.lwjgl.system.MemoryStack.stackPush;
 
 import java.nio.ByteBuffer;
 import java.nio.IntBuffer;
+import java.awt.Font;
+import java.awt.Color;
+import java.awt.Graphics2D;
+import java.awt.RenderingHints;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayInputStream;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -54,6 +60,9 @@ public final class LwjglRenderer implements Renderer {
     private int[] spriteTexW = new int[0];
     private int[] spriteTexH = new int[0];
     private Map<String, Integer> spriteIndex = new HashMap<>();
+    private final Map<String, Font> uiFonts = new HashMap<>();
+    private final Map<String, TextTexture> textCache = new HashMap<>();
+    private record TextTexture(int tex, int width, int height) {}
 
     private GLFWWindowSizeCallback winSizeCb;
     private GLFWFramebufferSizeCallback fbSizeCb;
@@ -191,6 +200,46 @@ public final class LwjglRenderer implements Renderer {
     }
 
     // ── Renderer interface ────────────────────────────────────────
+
+    /** Installs a server-provided TTF/OTF for custom UI text. */
+    public void setUiFont(String name, byte[] data) {
+        if (name == null || data == null || data.length == 0) return;
+        try {
+            Font f = Font.createFont(Font.TRUETYPE_FONT, new ByteArrayInputStream(data));
+            uiFonts.put(name, f);
+            textCache.entrySet().removeIf(e -> e.getKey().startsWith(name + "\u0000"));
+        } catch (Exception e) { throw new IllegalArgumentException("Invalid font " + name, e); }
+    }
+
+    public void textWithFont(String fontName, double x, double y, String text, int scale, float r, float g, float b) {
+        Font base = uiFonts.get(fontName);
+        if (base == null) { text(x, y, text, scale, r, g, b); return; }
+        int pxSize = Math.max(1, scale * 8);
+        String key = fontName + "\u0000" + pxSize + "\u0000" + Integer.toHexString((Math.round(r*255)<<16)|(Math.round(g*255)<<8)|Math.round(b*255)) + "\u0000" + text;
+        TextTexture tt = textCache.get(key);
+        if (tt == null) {
+            Font f = base.deriveFont((float)pxSize);
+            BufferedImage probe = new BufferedImage(4,4,BufferedImage.TYPE_INT_ARGB);
+            Graphics2D g2 = probe.createGraphics(); g2.setFont(f); var fm=g2.getFontMetrics();
+            int w=Math.max(1,fm.stringWidth(text)+4), h=Math.max(1,fm.getHeight()+4); g2.dispose();
+            BufferedImage img = new BufferedImage(w,h,BufferedImage.TYPE_INT_ARGB);
+            g2=img.createGraphics(); g2.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING,RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+            g2.setFont(f); g2.setColor(new Color(Math.round(r*255),Math.round(g*255),Math.round(b*255),255));
+            g2.drawString(text,2,2+g2.getFontMetrics().getAscent()); g2.dispose();
+            int tex=glGenTextures(); glBindTexture(GL_TEXTURE_2D,tex); glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_LINEAR); glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_LINEAR);
+            ByteBuffer buf=BufferUtils.createByteBuffer(w*h*4); int[] pixels=new int[w*h]; img.getRGB(0,0,w,h,pixels,0,w);
+            for(int v:pixels){buf.put((byte)((v>>16)&255)).put((byte)((v>>8)&255)).put((byte)(v&255)).put((byte)((v>>24)&255));} buf.flip();
+            glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA,w,h,0,GL_RGBA,GL_UNSIGNED_BYTE,buf); glBindTexture(GL_TEXTURE_2D,0);
+            tt=new TextTexture(tex,w,h); textCache.put(key,tt);
+        }
+        glEnable(GL_TEXTURE_2D); glBindTexture(GL_TEXTURE_2D,tt.tex()); glColor4f(1,1,1,1);
+        glBegin(GL_QUADS); glTexCoord2f(0,0);glVertex2d(x,y); glTexCoord2f(1,0);glVertex2d(x+tt.width(),y); glTexCoord2f(1,1);glVertex2d(x+tt.width(),y+tt.height()); glTexCoord2f(0,1);glVertex2d(x,y+tt.height()); glEnd(); glBindTexture(GL_TEXTURE_2D,0); glDisable(GL_TEXTURE_2D);
+    }
+
+    public double textWidthWithFont(String fontName, String text, int scale) {
+        Font f=uiFonts.get(fontName); if(f==null)return textWidth(text,scale);
+        BufferedImage img=new BufferedImage(1,1,BufferedImage.TYPE_INT_ARGB); Graphics2D g=img.createGraphics(); g.setFont(f.deriveFont((float)Math.max(1,scale*8))); int w=g.getFontMetrics().stringWidth(text); g.dispose(); return w;
+    }
 
     /** Uploads pak tile rasters as GL textures; indexes match the tile ids in the map. */
     public void setTileImages(PakImage[] images) {

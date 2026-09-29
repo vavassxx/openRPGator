@@ -72,7 +72,8 @@ public record UiLayout(String kind, long dialogId, String json) implements Packe
      * <pre>
      *   {"type":"panel","x":..,"y":..,"w":..,"h":..,"bg":[r,g,b,a]}
      *   {"type":"bar","x":..,"y":..,"w":..,"h":..,"value":n,"max":m,"fill":[r,g,b],"back":[r,g,b]}
-     *   {"type":"text","x":..,"y":..,"ref":idx,"size":dp,"color":[r,g,b]}
+     *   {"type":"text","x":..,"y":..,"ref":idx,"size":dp,"color":[r,g,b],"font":"MyFont.ttf"}
+     *   {"type":"button","x":..,"y":..,"w":..,"h":..,"ref":idx,"cmd":42,"value":"arg","font":"MyFont.ttf"}
      * </pre>
      */
     public static UiLayout layout(String layoutJson, List<String> strings) {

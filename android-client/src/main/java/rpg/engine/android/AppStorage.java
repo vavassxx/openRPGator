@@ -60,6 +60,8 @@ public final class AppStorage {
         if(!d.exists()) d.mkdirs();
         return d;
     }
+    public File fontsDir(){ File d=new File(dataDir(), "fonts"); if(!d.exists()) d.mkdirs(); return d; }
+
     public File pakCacheDir(){
         File d = new File(dataDir(), "pakcache");
         if(!d.exists()) d.mkdirs();

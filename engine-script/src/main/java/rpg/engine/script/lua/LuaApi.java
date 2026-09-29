@@ -4,6 +4,12 @@ import org.luaj.vm2.*;
 import org.luaj.vm2.lib.*;
 import static org.luaj.vm2.LuaValue.*;
 import rpg.engine.core.component.Transform;
+import rpg.engine.core.component.Collider;
+import rpg.engine.core.component.CircleCollider;
+import rpg.engine.core.component.BoxCollider;
+import rpg.engine.core.component.PolygonCollider;
+import rpg.engine.core.component.WallCollider;
+import rpg.engine.core.math.Vec2;
 import rpg.engine.core.component.Trigger;
 import rpg.engine.core.component.Scale;
 import rpg.engine.core.ecs.EntityId;
@@ -36,6 +42,7 @@ public final class LuaApi {
     private volatile long tick;
     private volatile UiSink uiSink;
     private volatile PlayerStore playerStore;
+    private volatile WorldPosition spawnPoint = new WorldPosition(0, 0, 0);
     private String version = "0.4.0";
 
     private final Map<EntityId, List<LuaFunction>> tickHandlers = new LinkedHashMap<>();
@@ -70,11 +77,12 @@ public final class LuaApi {
         world.events().on(TriggerExitEvent.class, e -> dispatchExit(e.entity(), e.trigger()));
         world.events().on(InteractRequestedEvent.class, e -> dispatchInteract(e.player(), e.target()));
     }
-    public void bindMap(RMap map) { this.map = map; }
+    public void bindMap(RMap map) { this.map = map; if (map != null) this.spawnPoint = new WorldPosition(map.width() * 0.5, map.height() * 0.5, 0); }
     public void setTick(long tick) { this.tick = tick; }
     public void setVersion(String version) { this.version = version; }
     public void setUiSink(UiSink sink) { this.uiSink = sink; }
     public void setPlayerStore(PlayerStore store) { this.playerStore = store; }
+    public WorldPosition spawnPoint() { return spawnPoint; }
 
     public void install(Globals globals) {
         LuaTable engine = new LuaTable();
@@ -82,6 +90,13 @@ public final class LuaApi {
         engine.set("tick", new ZeroArgFunction() { public LuaValue call() { return valueOf(tick); }});
         engine.set("log", new OneArgFunction() { public LuaValue call(LuaValue value) { System.out.println("[Lua] " + value.tojstring()); return NONE; }});
         engine.set("on_tick", new OneArgFunction() { public LuaValue call(LuaValue fn) { register(globalTickHandlers, null, fn); return NONE; }});
+        engine.set("set_spawn_point", new ArgsLib() {
+            public LuaValue callImpl(Varargs args) {
+                if (args.narg() < 2) return NONE;
+                spawnPoint = new WorldPosition(args.arg(1).todouble(), args.arg(2).todouble(), args.narg() >= 3 ? args.arg(3).todouble() : 0);
+                return NONE;
+            }
+        });
         engine.set("notify", new ArgsLib() {
             public LuaValue callImpl(Varargs args) {
                 if (uiSink == null || args.narg() == 0) return NONE;
@@ -425,6 +440,28 @@ public final class LuaApi {
         t.set("exists", new ZeroArgFunction() { public LuaValue call() { return valueOf(world.entities().entities().contains(id)); }});
         t.set("position", new ZeroArgFunction() { public LuaValue call() { return positionFacade(id); }});
         t.set("set_position", new ThreeArgFunction() { public LuaValue call(LuaValue x, LuaValue y, LuaValue z) { world.entities().set(id, new Transform(new WorldPosition(x.todouble(), y.todouble(), z.todouble()), 0)); return NONE; }});
+        t.set("move", new TwoArgFunction() { public LuaValue call(LuaValue dx, LuaValue dy) {
+            var tr = world.entities().get(id, Transform.class).orElseThrow();
+            var desired = new WorldPosition(tr.position().x()+dx.todouble(), tr.position().y()+dy.todouble(), tr.position().elevation());
+            var moved = world.collision().move(id, desired);
+            world.entities().set(id, new Transform(moved, tr.rotation()));
+            return valueOf(moved.x()!=desired.x() || moved.y()!=desired.y() ? 0 : 1);
+        }});
+        t.set("set_collider_circle", new OneArgFunction() { public LuaValue call(LuaValue radius) { world.entities().set(id, new CircleCollider(radius.checkdouble())); return NONE; }});
+        t.set("set_collider_box", new TwoArgFunction() { public LuaValue call(LuaValue hx, LuaValue hy) { world.entities().set(id, new BoxCollider(new Vec2(hx.checkdouble(), hy.checkdouble()))); return NONE; }});
+        t.set("set_collider_polygon", new OneArgFunction() { public LuaValue call(LuaValue vertices) {
+            LuaTable v = vertices.checktable(); List<Vec2> out = new ArrayList<>();
+            for (int i=1;i<=v.length();i++) { LuaTable q=v.get(i).checktable(); out.add(new Vec2(q.get(1).checkdouble(), q.get(2).checkdouble())); }
+            world.entities().set(id, new PolygonCollider(out)); return NONE;
+        }});
+        t.set("clear_collider", new ZeroArgFunction() { public LuaValue call() { world.entities().remove(id, Collider.class); return NONE; }});
+        t.set("set_wall", new ArgsLib() { public LuaValue callImpl(Varargs a) {
+            if (a.narg() < 4) return NONE;
+            double x1=a.arg(1).todouble(), y1=a.arg(2).todouble(), x2=a.arg(3).todouble(), y2=a.arg(4).todouble();
+            double thickness=a.narg()>=5?a.arg(5).todouble():0.15, height=a.narg()>=6?a.arg(6).todouble():2.0, bottom=a.narg()>=7?a.arg(7).todouble():0;
+            world.entities().set(id, new WallCollider(new Vec2(x1,y1), new Vec2(x2,y2), thickness, bottom, height));
+            return NONE;
+        }});
         t.set("set_trigger", new OneArgFunction() { public LuaValue call(LuaValue radius) { world.entities().set(id, new Trigger(radius.checkdouble())); return NONE; }});
         t.set("trigger_radius", new ZeroArgFunction() { public LuaValue call() { return world.entities().get(id, Trigger.class).map(r -> (LuaValue) valueOf(r.radius())).orElse(NIL); }});
         t.set("set_scale", new OneArgFunction() { public LuaValue call(LuaValue value) { world.entities().set(id, new Scale(Math.max(0.01, value.checkdouble()))); return NONE; }});

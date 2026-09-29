@@ -10,6 +10,8 @@ import android.view.*;
 import android.widget.*;
 import java.util.*;
 import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
 import java.nio.file.Path;
 import rpg.engine.android.controls.*;
 import rpg.engine.network.*;
@@ -624,6 +626,14 @@ public final class MainActivity extends Activity implements ClientSession.Listen
             status.setText(s);
         });
     }
+    @Override public void font(Font font) {
+        try {
+            File f = new File(appStorage.fontsDir(), font.name().replaceAll("[^A-Za-z0-9._-]", "_"));
+            try (FileOutputStream out = new FileOutputStream(f)) { out.write(font.data()); }
+            if (game != null) game.reloadFonts();
+        } catch (IOException e) { logger.error("Font save failed: " + font.name(), e); }
+    }
+
     @Override public void pakLoaded(String name) {
         logAsset(name);
         runOnUiThread(() -> { if (game != null) game.reloadAssets(); });
@@ -875,6 +885,8 @@ public final class MainActivity extends Activity implements ClientSession.Listen
             float density = getResources().getDisplayMetrics().density;
             for (Map<String, Object> w : layoutWidgets) {
                 String type = str(w, "type", "");
+                String fontName = str(w, "font", "");
+                p.setTypeface(fontName.isEmpty() ? Typeface.DEFAULT : loadFont(fontName));
                 float x = num(w, "x", 0) * W, y = top + num(w, "y", 0) * safeH;
                 switch (type) {
                     case "panel" -> {
@@ -980,6 +992,13 @@ public final class MainActivity extends Activity implements ClientSession.Listen
                 y -= th - p.ascent() + dp(6);
             }
             postInvalidateDelayed(150);
+        }
+
+        private Typeface loadFont(String name) {
+            String safe = name.replaceAll("[^A-Za-z0-9._-]", "_");
+            File f = new File(appStorage.fontsDir(), safe);
+            if (!f.isFile()) return Typeface.DEFAULT;
+            try { return Typeface.createFromFile(f); } catch (RuntimeException ignored) { return Typeface.DEFAULT; }
         }
 
         private static String str(Map<String, Object> m, String key, String dflt) {

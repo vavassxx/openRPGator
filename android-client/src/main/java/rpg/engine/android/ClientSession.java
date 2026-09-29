@@ -67,6 +67,7 @@ final class ClientSession {
                     Packet q = Protocol.read(in);
                     if (q instanceof Snapshot s) listener.snapshot(s);
                     else if (q instanceof UiLayout u) listener.ui(u);
+                    else if (q instanceof Font f) listener.font(f);
                     else if (q instanceof MapPacket m) listener.map(m);
                     else if (q instanceof Script sc) listener.script(sc);
                     // legacy push-UI packets, kept for compatibility with older servers
