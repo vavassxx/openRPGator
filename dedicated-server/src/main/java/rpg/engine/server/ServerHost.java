@@ -60,6 +60,7 @@ public final class ServerHost {
     private ScheduledExecutorService tick;
     private static final String PLAYER_SPRITE = rpg.engine.runtime.Sprites.PLAYER;
     private volatile List<Path> pakFiles = List.of();
+    private volatile Path fontDir;
     /**
      * Serializes all access to {@link GameRuntime} (world mutate + snapshot broadcast). The ECS
      * is not thread-safe: world mutations come from the tick thread ({@code runtime.tick()},
@@ -82,6 +83,8 @@ public final class ServerHost {
         runtime.setUiSink(uiSink());
         if (cfg.dataDir() != null) runtime.setPlayerStore(new FilePlayerStore(cfg.dataDir().resolve("players")));
         pakFiles = List.copyOf(cfg.paks());
+        fontDir = cfg.map() != null && cfg.map().getParent() != null
+                ? cfg.map().getParent().resolve("fonts") : null;
 
         if (cfg.map() != null && Files.isRegularFile(cfg.map())) {
             try {
@@ -162,7 +165,7 @@ public final class ServerHost {
             client = new Client(entityId, s, out);
             if (!pakFiles.isEmpty()) PakStreamer.send(out, pakFiles);
             Protocol.write(out, new Welcome(entityId));
-            sendFonts(out, cfg.map());
+            sendFonts(out, fontDir);
             // Register only after Welcome: the tick thread broadcasts snapshots to every client,
             // so a client must not be reachable before its handshake has completed.
             clients.put(entityId, client);
@@ -276,9 +279,8 @@ public final class ServerHost {
 
     /** The authoritative ground layer to stream on connect; null if the host has no map. */
 
-    private void sendFonts(OutputStream out, Path map) {
-        if (map == null || map.getParent() == null) return;
-        Path dir = map.getParent().resolve("fonts");
+    private void sendFonts(OutputStream out, Path dir) {
+        if (dir == null) return;
         if (!Files.isDirectory(dir)) return;
         try (var paths = Files.list(dir)) {
             for (Path p : paths.filter(Files::isRegularFile).sorted().toList()) {
