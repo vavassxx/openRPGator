@@ -73,6 +73,30 @@ public final class ServerHost {
         this.listener = listener == null ? line -> {} : listener;
     }
 
+    /**
+     * Moves the pre-host-layout player store into the host-owned data directory.
+     * Existing files are preserved if the destination already contains a save.
+     */
+    private static void migrateLegacyPlayerStore(Path legacyDir, Path playerDir) {
+        if (!Files.isDirectory(legacyDir)) {
+            return;
+        }
+        try {
+            Files.createDirectories(playerDir);
+            try (DirectoryStream<Path> files = Files.newDirectoryStream(legacyDir)) {
+                for (Path file : files) {
+                    Path target = playerDir.resolve(file.getFileName().toString());
+                    if (Files.isRegularFile(file) && !Files.exists(target)) {
+                        Files.move(file, target);
+                    }
+                }
+            }
+            try { Files.delete(legacyDir); } catch (DirectoryNotEmptyException ignored) { }
+        } catch (IOException e) {
+            System.err.println("[save] legacy player-store migration failed: " + e.getMessage());
+        }
+    }
+
     public boolean isRunning() { return running; }
     public GameRuntime runtime() { return runtime; }
     public int port() { return server == null ? -1 : server.getLocalPort(); }
@@ -81,7 +105,12 @@ public final class ServerHost {
         if (running) return;
         runtime = new GameRuntime();
         runtime.setUiSink(uiSink());
-        if (cfg.dataDir() != null) runtime.setPlayerStore(new FilePlayerStore(cfg.dataDir().resolve("players")));
+        if (cfg.dataDir() != null) {
+            Path hostDir = cfg.dataDir().resolve("host");
+            Path playerDir = hostDir.resolve("players");
+            migrateLegacyPlayerStore(cfg.dataDir().resolve("players"), playerDir);
+            runtime.setPlayerStore(new FilePlayerStore(playerDir));
+        }
         pakFiles = List.copyOf(cfg.paks());
         fontDir = cfg.map() != null && cfg.map().getParent() != null
                 ? cfg.map().getParent().resolve("fonts") : null;
