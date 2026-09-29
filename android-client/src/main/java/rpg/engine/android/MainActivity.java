@@ -994,6 +994,12 @@ public final class MainActivity extends Activity implements ClientSession.Listen
             postInvalidateDelayed(150);
         }
 
+        void reloadFonts() {
+            // Fonts are resolved from AppStorage on demand by drawLayout().
+            // A downloaded font therefore only needs to invalidate the view.
+            postInvalidate();
+        }
+
         private Typeface loadFont(String name) {
             String safe = name.replaceAll("[^A-Za-z0-9._-]", "_");
             File f = new File(appStorage.fontsDir(), safe);

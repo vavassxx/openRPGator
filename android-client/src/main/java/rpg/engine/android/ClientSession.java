@@ -21,6 +21,7 @@ final class ClientSession {
         void map(MapPacket m);
         void script(Script s);
         void pakLoaded(String name); // a pak finished buffering to the cache
+        void font(Font font); // a custom UI font finished downloading
         void status(String s);
     }
     private final Listener listener;
