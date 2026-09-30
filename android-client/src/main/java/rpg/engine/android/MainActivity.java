@@ -228,7 +228,17 @@ public final class MainActivity extends Activity implements ClientSession.Listen
         stage.addView(game, new FrameLayout.LayoutParams(-1, -1));
         overlay = new ControlOverlay(this, controls, (a, pressed) -> onAction(a, pressed));
         overlay.setZoomListener(f -> game.setZoom(f));
-        overlay.setTapListener((fx, fy) -> game.tapWidget(fx, fy));
+        overlay.setTapListener((x, y) -> {
+            // The control overlay and GameView normally share the same bounds, but Android
+            // insets/layout changes can give them different local origins. Convert the touch
+            // point through window coordinates so HUD hit-testing uses exactly the same space
+            // as GameView rendering.
+            int[] overlayLoc = new int[2];
+            int[] gameLoc = new int[2];
+            overlay.getLocationOnScreen(overlayLoc);
+            game.getLocationOnScreen(gameLoc);
+            game.tapWidgetScreen(overlayLoc[0] + x, overlayLoc[1] + y, gameLoc[0], gameLoc[1]);
+        });
         stage.addView(overlay, new FrameLayout.LayoutParams(-1, -1));
         root.addView(stage, new FrameLayout.LayoutParams(-1, -1));
 
@@ -950,12 +960,16 @@ public final class MainActivity extends Activity implements ClientSession.Listen
 
         /** Hit-test a tap (screen fractions) against interactive widgets; a "button" press is
          *  routed to the client script (or straight to the server). */
-        void tapWidget(float fx, float fy) {
+        /** Hit-test in the GameView's own pixel coordinate system. The caller supplies a
+         * screen-space touch point so Android view-origin/inset differences cannot shift the
+         * interactive region away from the rendered widget. */
+        void tapWidgetScreen(float screenX, float screenY, float gameScreenX, float gameScreenY) {
             if (layoutWidgets.isEmpty()) return;
+            float px = screenX - gameScreenX;
+            float py = screenY - gameScreenY;
             float W = getWidth(), H = getHeight();
             float top = hostUiTopInset();
             float safeH = Math.max(1f, H - top);
-            float px = fx * W, py = top + fy * safeH;
             for (Map<String, Object> w : layoutWidgets) {
                 if (!"button".equals(str(w, "type", ""))) continue;
                 float x0 = num(w, "x", 0) * W, y0 = top + num(w, "y", 0) * safeH;

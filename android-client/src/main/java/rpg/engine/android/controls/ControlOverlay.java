@@ -10,7 +10,7 @@ public final class ControlOverlay extends View {
     public interface Listener { void action(ControlAction action, boolean pressed); }
     public interface ZoomListener { void zoom(float factor); }
     /** A plain tap that hit no control (screen fractions 0..1) — forwarded to the HUD widget layer. */
-    public interface TapListener { void tap(float fx, float fy); }
+    public interface TapListener { void tap(float x, float y); }
     private final ControlLayout layout; private final Listener listener; private final Paint p=new Paint(Paint.ANTI_ALIAS_FLAG);
     private boolean editMode; private ControlBinding selected; private float lastX,lastY; private final HashSet<ControlAction> held=new HashSet<>();
     private ZoomListener zoomListener; private float pinchStart = -1;
@@ -45,7 +45,7 @@ public final class ControlOverlay extends View {
             // Tap that hit no control and did not drift — the HUD widget layer (custom screens)
             // decides what it means (fractions of the screen).
             float dx=x-downX,dy=y-downY;
-            if(dx*dx+dy*dy<24*24)tapListener.tap(x/getWidth(),y/getHeight());
+            if(dx*dx+dy*dy<24*24)tapListener.tap(x, y);
         }return true;
     }
     /** Pinch gesture: incremental distance ratio → zoom factor; cancels held buttons on transition. */
