@@ -1,20 +1,16 @@
-# openRPGator region integration — step 2
+# openRPGator region integration — step 3
 
-Overlay for branch `asteria-regions-mainline`.
+Overlay this archive on `asteria-regions-mainline` after step 2.
 
-This step moves the **region identity/lifecycle boundary** into `engine-runtime` without yet
-changing `ServerHost` or Lua transition dispatch.
+This step introduces `RegionManager`, the engine-runtime owner for a server's set of region runtimes.
+It loads `RegionCatalog`, assigns per-region entity ID namespaces, ticks all regions, resolves portals,
+and provides host-locked ECS migration.
 
-Included:
-- `GameWorld(long entityIdBase)` — region-local entity namespace.
-- `GameRuntime(regionId, entityIdBase)` — explicitly region-local simulation runtime.
-- `RegionRuntime` — host-facing lifecycle wrapper for a region.
-- Backward-compatible no-arg constructors remain available.
+It intentionally does not modify networking or `ServerHost` yet. The next integration step can make
+`ServerHost` consume this manager while keeping connection/session state outside region runtimes.
 
-Not included deliberately:
-- ServerHost multi-region orchestration.
-- Player migration.
-- Lua `engine.transition`.
-- Network protocol changes.
+Commit:
 
-Those belong in the next slices, after this boundary is in place.
+    git add .
+    git commit -m "engine: add region manager and migration"
+    git push
