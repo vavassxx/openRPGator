@@ -7,11 +7,12 @@ import java.util.*;
 import rpg.engine.core.math.WorldPosition;
 import rpg.engine.core.util.VarInts;
 
-/** Binary .rmap serializer. The stream API is also used by the Android editor. */
+/** Binary .rmap serializer. Version 3 adds server-side region portals. */
 public final class RMapIO {
-    /** v1: entity = id/prefab/position/script; v2 adds entity scale. */
-    private static final int VERSION = 2;
+    /** v1: entity scale absent; v2: entity scale; v3: entity scale + portals. */
+    private static final int VERSION = 3;
     private static final int VERSION_1 = 1;
+    private static final int VERSION_2 = 2;
     private static final byte[] MAGIC = {'R','M','A','P'};
     private RMapIO() {}
 
@@ -35,6 +36,14 @@ public final class RMapIO {
             str(out, e.script() == null ? "" : e.script());
             out.writeDouble(e.scale());
         }
+        out.writeInt(map.portals().size());
+        for (var p : map.portals()) {
+            str(out, p.id());
+            out.writeDouble(p.position().x()); out.writeDouble(p.position().y()); out.writeDouble(p.position().elevation());
+            out.writeDouble(p.radius());
+            str(out, p.targetRegion());
+            out.writeDouble(p.targetPosition().x()); out.writeDouble(p.targetPosition().y()); out.writeDouble(p.targetPosition().elevation());
+        }
         out.flush();
     }
 
@@ -46,7 +55,7 @@ public final class RMapIO {
         DataInputStream in = stream instanceof DataInputStream d ? d : new DataInputStream(new BufferedInputStream(stream));
         for (byte b : MAGIC) if (in.readByte() != b) throw new IOException("bad RMAP");
         int version = in.readInt();
-        if (version != VERSION_1 && version != VERSION) throw new IOException("unsupported RMAP version: " + version);
+        if (version < VERSION_1 || version > VERSION) throw new IOException("unsupported RMAP version: " + version);
         String n = str(in); int ts = in.readInt(), w = in.readInt(), h = in.readInt();
         var ls = new ArrayList<TileLayer>(); int layerCount = in.readInt();
         for (int i = 0; i < layerCount; i++) {
@@ -57,12 +66,24 @@ public final class RMapIO {
         var es = new ArrayList<MapEntity>(); int entityCount = in.readInt();
         for (int i = 0; i < entityCount; i++) {
             MapEntity e = new MapEntity(str(in), str(in),
-                    new WorldPosition(in.readDouble(), in.readDouble(), in.readDouble()),
-                    emptyToNull(str(in)));
-            if (version >= 2) e = new MapEntity(e.id(), e.prefab(), e.position(), e.script(), in.readDouble());
+                    new WorldPosition(in.readDouble(), in.readDouble(), in.readDouble()), emptyToNull(str(in)));
+            if (version >= VERSION_2) e = new MapEntity(e.id(), e.prefab(), e.position(), e.script(), in.readDouble());
             es.add(e);
         }
-        return new RMap(n, ts, w, h, ls, es);
+        var portals = new ArrayList<MapPortal>();
+        if (version >= VERSION) {
+            int portalCount = in.readInt();
+            if (portalCount < 0 || portalCount > 1_000_000) throw new IOException("invalid portal count");
+            for (int i = 0; i < portalCount; i++) {
+                String id = str(in);
+                var pos = new WorldPosition(in.readDouble(), in.readDouble(), in.readDouble());
+                double radius = in.readDouble();
+                String target = str(in);
+                var dst = new WorldPosition(in.readDouble(), in.readDouble(), in.readDouble());
+                portals.add(new MapPortal(id, pos, radius, target, dst));
+            }
+        }
+        return new RMap(n, ts, w, h, ls, es, portals);
     }
 
     private static void str(DataOutput out, String s) throws IOException { byte[] b = s.getBytes(StandardCharsets.UTF_8); VarInts.write(out, b.length); out.write(b); }
