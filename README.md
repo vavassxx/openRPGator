@@ -1,27 +1,20 @@
-# openRPGator — Asteria regions mainline, step 1
+# openRPGator region integration — step 2
 
-This is an **overlay archive**, not a replacement checkout. Unpack it over a clean checkout of
-`master`; it contains only the first region-engine slice and its tests/docs.
+Overlay for branch `asteria-regions-mainline`.
 
-Implemented:
+This step moves the **region identity/lifecycle boundary** into `engine-runtime` without yet
+changing `ServerHost` or Lua transition dispatch.
 
-- `MapPortal` as a generic engine map primitive.
-- `.rmap` v3 with portal serialization.
-- v1/v2 `.rmap` compatibility.
-- `RegionCatalog` with startup validation and normalized region IDs.
-- `WorldRegistry.adopt(...)` plus monotonic imported-ID allocation.
-- Regression tests for v3 portal round-trip and v2 compatibility.
-- `docs/regions.md` describing the intended contract.
+Included:
+- `GameWorld(long entityIdBase)` — region-local entity namespace.
+- `GameRuntime(regionId, entityIdBase)` — explicitly region-local simulation runtime.
+- `RegionRuntime` — host-facing lifecycle wrapper for a region.
+- Backward-compatible no-arg constructors remain available.
 
-Not yet included deliberately:
+Not included deliberately:
+- ServerHost multi-region orchestration.
+- Player migration.
+- Lua `engine.transition`.
+- Network protocol changes.
 
-- multi-`GameRuntime` server lifecycle;
-- player detach/attach orchestration;
-- per-region Lua runtime binding;
-- automatic portal transition in `ServerHost`;
-- editor portal CRUD;
-- Asteria game content.
-
-Those belong in the next slice, after this serialization/catalog contract is accepted. This keeps
-the first archive small enough to review and avoids importing Asteria-specific assumptions into the
-engine.
+Those belong in the next slices, after this boundary is in place.

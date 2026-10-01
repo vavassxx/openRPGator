@@ -15,39 +15,46 @@ import java.nio.file.Path;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import org.luaj.vm2.LuaError;
 
+/** Region-local simulation runtime. Host/session state lives outside this class. */
 public final class GameRuntime {
-    private final GameWorld world = new GameWorld();
+    private final String regionId;
+    private final GameWorld world;
     private final LuaRuntime scripts = new LuaRuntime();
     private final ConcurrentLinkedQueue<Runnable> pendingActions = new ConcurrentLinkedQueue<>();
     private RMap map;
-    { scripts.bindWorld(world); }
+
+    public GameRuntime() { this("default", 0); }
+    public GameRuntime(long entityIdBase) { this("default", entityIdBase); }
+
+    /** Creates a runtime whose entity allocator is namespaced by the supplied base. */
+    public GameRuntime(String regionId, long entityIdBase) {
+        if (regionId == null || regionId.isBlank()) throw new IllegalArgumentException("regionId is blank");
+        this.regionId = regionId.trim().toLowerCase(java.util.Locale.ROOT);
+        world = new GameWorld(entityIdBase);
+        scripts.bindWorld(world);
+    }
+
+    public String regionId() { return regionId; }
     public GameWorld world() { return world; }
     public LuaRuntime scripts() { return scripts; }
     public RMap map() { return map; }
 
     public void setUiSink(UiSink sink) { scripts.api().setUiSink(sink); }
     public void setPlayerStore(PlayerStore store) { scripts.api().setPlayerStore(store); }
-
-    /** Host-owned: tells the script layer which entity ids are live players this tick. */
     public void setPlayers(java.util.Collection<Long> playerIds) { scripts.api().setPlayers(playerIds); }
 
-    /** Thread-safe: queues a dialog response to be delivered on the next tick. */
     public void respondDialog(long dialogId, int choice) {
         pendingActions.add(() -> scripts.api().respondDialog(dialogId, choice));
     }
 
-    /** Thread-safe: queues a client custom command (widget button / client script) for Lua on the
-     *  next tick. The command value is host-owned — Lua {@code engine.on_command} decodes it. */
     public void dispatchCommand(long playerEntityId, int code, String arg) {
         pendingActions.add(() -> scripts.api().dispatchCommand(playerEntityId, code, arg));
     }
 
-    /** Thread-safe: queues a semantic client action for the next tick. */
     public void dispatchAction(long playerEntityId, String action) {
         pendingActions.add(() -> scripts.api().dispatchAction(playerEntityId, action));
     }
 
-    /** Thread-safe: queues a player disconnect hook before the host destroys the player entity. */
     public void dispatchDisconnect(long playerEntityId) {
         pendingActions.add(() -> scripts.api().dispatchDisconnect(playerEntityId));
     }
@@ -76,11 +83,6 @@ public final class GameRuntime {
         }
     }
 
-    /**
-     * UTF-8 file read that works on every Android API level.
-     * {@code Files.readString} (Java 11) does not exist in Android's libcore and
-     * throws NoSuchMethodError at runtime, so the script is read via plain java.io.
-     */
     private static String readUtf8(Path path) throws IOException {
         try (InputStream in = new FileInputStream(path.toFile())) {
             ByteArrayOutputStream out = new ByteArrayOutputStream();

@@ -1,23 +1,17 @@
-# Regions
+# Region runtime boundary
 
-A region is an independently simulated map instance owned by the server. The engine does not
-assign MMO semantics to the word: a region may be a town, dungeon, event map, tutorial, arena,
-or overworld.
+A `RegionRuntime` is the server-owned lifecycle object for one independently simulated map instance.
+It has a stable normalized region id and contains one `GameRuntime`.
 
-## Map format
+`GameRuntime` is now explicitly region-local and owns:
+- the `GameWorld` / ECS registry;
+- collision and trigger state;
+- the region's `.rmap`;
+- the region-local Lua runtime.
 
-`.rmap` version 3 adds `MapPortal` records. Versions 1 and 2 remain readable and simply contain
-no portals. A portal has a source position/radius, a target region id and a destination position.
+The region id is not an MMO-specific concept. A region can represent a town, dungeon, arena,
+tutorial, event map, instance, or overworld.
 
-## Catalog
-
-`RegionCatalog` loads `*.rmap` files from one server directory. The filename stem is the stable
-region id. Startup validation rejects duplicate ids, invalid ids, duplicate portal ids within a
-region, and portals pointing at unknown regions.
-
-## Migration
-
-`WorldRegistry.adopt(EntityId)` is the low-level primitive needed by a host to move an existing
-entity id into another region registry without changing the player's identity. The eventual
-host-level transition API should own the complete detach/attach operation; callers should not
-need to manipulate ECS registries directly.
+Entity allocation can be namespaced per region through `GameWorld(long entityIdBase)` and
+`GameRuntime(String, long)`. Cross-region player migration is intentionally not implemented here;
+the host layer will own detach/attach of persistent player state in the next step.
