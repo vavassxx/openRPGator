@@ -6,7 +6,6 @@ import rpg.engine.map.MapPortal;
 import rpg.engine.map.RegionCatalog;
 
 import java.io.IOException;
-import java.nio.file.Path;
 import java.util.*;
 import java.util.function.BiConsumer;
 
@@ -20,8 +19,6 @@ import java.util.function.BiConsumer;
  */
 public final class RegionManager {
     private final Map<String, RegionRuntime> regions = new LinkedHashMap<>();
-
-    public RegionManager() {}
 
     public Collection<RegionRuntime> all() {
         return Collections.unmodifiableCollection(regions.values());
@@ -102,10 +99,18 @@ public final class RegionManager {
         return true;
     }
 
-    /** Resolves the first portal at a position in the source region. */
     public Optional<MapPortal> portalAt(String sourceId, WorldPosition position) {
         RegionRuntime source = require(sourceId);
-        return source.map() == null ? Optional.empty() : source.map().portalAt(position);
+        var map = source.map();
+        return map == null ? Optional.empty() : map.portals().stream()
+                .filter(portal -> distanceSquared(portal.position(), position) <= portal.radius() * portal.radius())
+                .findFirst();
+    }
+
+    private static double distanceSquared(WorldPosition a, WorldPosition b) {
+        double dx = a.x() - b.x();
+        double dy = a.y() - b.y();
+        return dx * dx + dy * dy;
     }
 
     private static String normalize(String raw) {
