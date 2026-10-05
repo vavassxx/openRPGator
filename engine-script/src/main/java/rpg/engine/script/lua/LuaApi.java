@@ -42,6 +42,7 @@ public final class LuaApi {
     private volatile long tick;
     private volatile UiSink uiSink;
     private volatile PlayerStore playerStore;
+    private volatile RegionTransitionSink regionTransitionSink;
     private volatile WorldPosition spawnPoint = new WorldPosition(0, 0, 0);
     private String version = "0.4.0";
 
@@ -82,6 +83,7 @@ public final class LuaApi {
     public void setVersion(String version) { this.version = version; }
     public void setUiSink(UiSink sink) { this.uiSink = sink; }
     public void setPlayerStore(PlayerStore store) { this.playerStore = store; }
+    public void setRegionTransitionSink(RegionTransitionSink sink) { this.regionTransitionSink = sink; }
     public WorldPosition spawnPoint() { return spawnPoint; }
 
     public void install(Globals globals) {
@@ -90,6 +92,19 @@ public final class LuaApi {
         engine.set("tick", new ZeroArgFunction() { public LuaValue call() { return valueOf(tick); }});
         engine.set("log", new OneArgFunction() { public LuaValue call(LuaValue value) { System.out.println("[Lua] " + value.tojstring()); return NONE; }});
         engine.set("on_tick", new OneArgFunction() { public LuaValue call(LuaValue fn) { register(globalTickHandlers, null, fn); return NONE; }});
+        engine.set("transition", new ArgsLib() {
+            public LuaValue callImpl(Varargs args) {
+                if (regionTransitionSink == null || args.narg() < 4) return FALSE;
+                long playerId = targetIdOf(args.arg(1));
+                if (playerId == -1) return FALSE;
+                String targetRegion = args.arg(2).tojstring();
+                double x = args.arg(3).todouble();
+                double y = args.arg(4).todouble();
+                double z = args.narg() >= 5 ? args.arg(5).todouble() : 0;
+                return regionTransitionSink.transition(null, playerId, targetRegion, x, y, z)
+                        ? TRUE : FALSE;
+            }
+        });
         engine.set("set_spawn_point", new ArgsLib() {
             public LuaValue callImpl(Varargs args) {
                 if (args.narg() < 2) return NONE;

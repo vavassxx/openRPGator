@@ -1,16 +1,34 @@
-# openRPGator region integration — step 4 (host-state-safe)
+# openRPGator regions — step 5
 
-Overlay this archive on `asteria-regions-mainline` after the step 3 fix.
+Overlay this archive on `asteria-regions-mainline` after step 4.
 
-This deliberately does **not** make ECS a generic player-state transfer mechanism.
-`RegionManager.migrate()` moves only the stable entity identity and destination transform between
-region-local worlds. Persistent player state remains host-owned; host/Lua code decides what to save,
-restore, transform, or discard and which destination components to reconstruct.
+This step wires the region runtime into `ServerHost` and exposes host-owned Lua transitions.
 
-The migration rolls back the entity identity if destination adoption fails.
+### What changes
 
-Commit:
+- `<data>/host/regions/*.rmap` is auto-discovered when present.
+- If no region maps exist, the old single `<data>/host/*.rmap` path remains supported.
+- Each connected player has a current `regionId`.
+- Lua gets `engine.transition(player, region, x, y [, z])`.
+- Portal transitions are authoritative and server-side.
+- Snapshots are filtered by each player's current region.
+- Each region receives only its own player IDs in `world.players()`.
+- Destination `MapPacket` is sent immediately after a transition; protocol is unchanged.
+- Persistent player state is NOT copied by the engine. Migration preserves only `EntityId`; the host reconstructs only the minimal session representation (`Name`/collider), while scripts remain responsible for persistent save/load and game state.
 
-    git add .
-    git commit -m "engine: keep player state host-owned during region migration"
-    git push
+### Apply
+
+1. Unzip over the branch checkout.
+2. Run:
+
+    `sh apply-lua.sh`
+
+   The helper patches the existing `LuaApi.java` and removes itself afterward.
+3. Review the diff and build locally.
+4. Commit:
+
+    `git add .`
+    `git commit -m "server: wire multi-region player sessions"`
+    `git push`
+
+Do not add a generic ECS state snapshot here: that would violate the host-owned player-state contract.
