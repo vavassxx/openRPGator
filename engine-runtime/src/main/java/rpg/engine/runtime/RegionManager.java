@@ -9,37 +9,21 @@ import java.io.IOException;
 import java.util.*;
 import java.util.function.BiConsumer;
 
-/**
- * Owns the set of independently simulated region runtimes for a server instance.
- *
- * <p>This class deliberately contains no networking and no player/session state. A host may
- * therefore use it from the dedicated server, an embedded Android server, tests, or tooling.
- * Entity migration is performed as an atomic detach/adopt operation while the caller owns the
- * server/world lock.
- */
+/** Owns independently simulated region runtimes. Persistent player state belongs to the host. */
 public final class RegionManager {
     private final Map<String, RegionRuntime> regions = new LinkedHashMap<>();
 
-    public Collection<RegionRuntime> all() {
-        return Collections.unmodifiableCollection(regions.values());
-    }
-
-    public Set<String> ids() {
-        return Collections.unmodifiableSet(regions.keySet());
-    }
-
+    public Collection<RegionRuntime> all() { return Collections.unmodifiableCollection(regions.values()); }
+    public Set<String> ids() { return Collections.unmodifiableSet(regions.keySet()); }
     public Optional<RegionRuntime> find(String id) {
         if (id == null) return Optional.empty();
         return Optional.ofNullable(regions.get(normalize(id)));
     }
-
     public RegionRuntime require(String id) {
         return find(id).orElseThrow(() -> new IllegalArgumentException("unknown region: " + id));
     }
-
     public void clear() { regions.clear(); }
 
-    /** Loads every catalog entry and assigns a non-overlapping entity-id namespace to each region. */
     public void load(RegionCatalog catalog) throws IOException {
         Objects.requireNonNull(catalog, "catalog");
         regions.clear();
@@ -53,7 +37,6 @@ public final class RegionManager {
         }
     }
 
-    /** Adds a single already-loaded runtime. Primarily useful for embedded hosts and tests. */
     public void add(RegionRuntime runtime) {
         Objects.requireNonNull(runtime, "runtime");
         if (regions.putIfAbsent(runtime.id(), runtime) != null)
@@ -68,8 +51,10 @@ public final class RegionManager {
     }
 
     /**
-     * Moves an entity between region worlds. Caller must hold the host's world lock.
-     * Only the region-local ECS representation moves; persistent player/session state remains host-owned.
+     * Moves only the region-local ECS representation of a player.
+     * Persistent state (inventory, progression, quests, etc.) is host/script owned and is not
+     * inferred or copied by this method. The host may reconstruct whatever components the target
+     * region requires after the move.
      */
     public boolean migrate(EntityId entity, String fromId, String toId, WorldPosition target) {
         Objects.requireNonNull(entity, "entity");
@@ -77,26 +62,26 @@ public final class RegionManager {
         String from = normalize(fromId);
         String to = normalize(toId);
         if (from.equals(to)) return false;
+
         RegionRuntime source = require(from);
         RegionRuntime destination = require(to);
-
         var sourceRegistry = source.world().entities();
         if (!sourceRegistry.entities().contains(entity)) return false;
 
-        var name = sourceRegistry.get(entity, rpg.engine.core.component.Name.class).orElse(null);
-        var prefab = sourceRegistry.get(entity, rpg.engine.core.component.Prefab.class).orElse(null);
-        var scale = sourceRegistry.get(entity, rpg.engine.core.component.Scale.class).orElse(null);
-        var collider = sourceRegistry.get(entity, rpg.engine.core.component.Collider.class).orElse(null);
-
+        // Preserve only the stable entity identity. The host/script layer owns player state and
+        // decides which region-local components need to be reconstructed in the destination.
         sourceRegistry.destroy(entity);
-        var destinationRegistry = destination.world().entities();
-        destinationRegistry.adopt(entity);
-        if (name != null) destinationRegistry.set(entity, name);
-        if (prefab != null) destinationRegistry.set(entity, prefab);
-        if (scale != null) destinationRegistry.set(entity, scale);
-        if (collider != null) destinationRegistry.set(entity, collider);
-        destinationRegistry.set(entity, new rpg.engine.core.component.Transform(target, 0));
-        return true;
+        try {
+            var destinationRegistry = destination.world().entities();
+            destinationRegistry.adopt(entity);
+            destinationRegistry.set(entity, new rpg.engine.core.component.Transform(target, 0));
+            return true;
+        } catch (RuntimeException failure) {
+            var destinationRegistry = destination.world().entities();
+            if (destinationRegistry.entities().contains(entity)) destinationRegistry.destroy(entity);
+            sourceRegistry.adopt(entity);
+            throw failure;
+        }
     }
 
     public Optional<MapPortal> portalAt(String sourceId, WorldPosition position) {
@@ -108,11 +93,9 @@ public final class RegionManager {
     }
 
     private static double distanceSquared(WorldPosition a, WorldPosition b) {
-        double dx = a.x() - b.x();
-        double dy = a.y() - b.y();
+        double dx = a.x() - b.x(), dy = a.y() - b.y();
         return dx * dx + dy * dy;
     }
-
     private static String normalize(String raw) {
         if (raw == null) throw new IllegalArgumentException("region id is null");
         return raw.trim().toLowerCase(Locale.ROOT);

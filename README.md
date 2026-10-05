@@ -1,16 +1,16 @@
-# openRPGator region integration — step 3
+# openRPGator region integration — step 4 (host-state-safe)
 
-Overlay this archive on `asteria-regions-mainline` after step 2.
+Overlay this archive on `asteria-regions-mainline` after the step 3 fix.
 
-This step introduces `RegionManager`, the engine-runtime owner for a server's set of region runtimes.
-It loads `RegionCatalog`, assigns per-region entity ID namespaces, ticks all regions, resolves portals,
-and provides host-locked ECS migration.
+This deliberately does **not** make ECS a generic player-state transfer mechanism.
+`RegionManager.migrate()` moves only the stable entity identity and destination transform between
+region-local worlds. Persistent player state remains host-owned; host/Lua code decides what to save,
+restore, transform, or discard and which destination components to reconstruct.
 
-It intentionally does not modify networking or `ServerHost` yet. The next integration step can make
-`ServerHost` consume this manager while keeping connection/session state outside region runtimes.
+The migration rolls back the entity identity if destination adoption fails.
 
 Commit:
 
     git add .
-    git commit -m "engine: add region manager and migration"
+    git commit -m "engine: keep player state host-owned during region migration"
     git push
