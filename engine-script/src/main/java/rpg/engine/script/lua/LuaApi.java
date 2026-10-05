@@ -43,6 +43,7 @@ public final class LuaApi {
     private volatile UiSink uiSink;
     private volatile PlayerStore playerStore;
     private volatile RegionTransitionSink regionTransitionSink;
+    private volatile String regionId = "default";
     private volatile WorldPosition spawnPoint = new WorldPosition(0, 0, 0);
     private String version = "0.4.0";
 
@@ -84,6 +85,11 @@ public final class LuaApi {
     public void setUiSink(UiSink sink) { this.uiSink = sink; }
     public void setPlayerStore(PlayerStore store) { this.playerStore = store; }
     public void setRegionTransitionSink(RegionTransitionSink sink) { this.regionTransitionSink = sink; }
+    /** Sets the region identity used when Lua requests a cross-region transition. */
+    public void setRegionId(String regionId) {
+        if (regionId == null || regionId.isBlank()) throw new IllegalArgumentException("regionId is blank");
+        this.regionId = regionId.trim().toLowerCase(Locale.ROOT);
+    }
     public WorldPosition spawnPoint() { return spawnPoint; }
 
     public void install(Globals globals) {
@@ -101,7 +107,7 @@ public final class LuaApi {
                 double x = args.arg(3).todouble();
                 double y = args.arg(4).todouble();
                 double z = args.narg() >= 5 ? args.arg(5).todouble() : 0;
-                return regionTransitionSink.transition(null, playerId, targetRegion, x, y, z)
+                return regionTransitionSink.transition(regionId, playerId, targetRegion, x, y, z)
                         ? TRUE : FALSE;
             }
         });

@@ -1,19 +1,23 @@
-# openRPGator regions — step 6
+# openRPGator — Asteria regions integration, Step 7
 
-Overlay this archive on `asteria-regions-mainline` after step 5, then run:
+Small integration fix for `asteria-regions-mainline`.
 
-    sh apply-step6.sh
+`ServerHost` validates the source region of Lua transition requests (Step 6), but
+`LuaApi.engine.transition()` was still passing `null` as that source. This made all
+Lua-driven transitions fail the new validation.
 
-This is a small safety/ordering fix for the multi-region server:
+This patch gives each Lua API instance its owning region id, initializes it from
+`GameRuntime`, and passes it to `RegionTransitionSink`.
 
-- Lua transition requests now carry and validate their source region against the player's actual session region.
-- A stale Lua callback from another region cannot teleport an arbitrary player.
-- Portal transitions are resolved after the input's actions have been queued for the current region, avoiding an input-triggered transition changing the region before those queued actions are dispatched.
+No player-state snapshot/copy or new lifecycle architecture is introduced. Host/Lua
+remains responsible for persistent player state.
 
-The engine still does **not** copy generic ECS/player state during migration. Persistent state remains host/script-owned.
+Apply from repository root:
 
-Then review and commit:
+    sh /path/to/apply-step7.sh
+
+Then build/test normally and commit:
 
     git add .
-    git commit -m "server: validate region transitions"
+    git commit -m "fix: preserve region source for Lua transitions"
     git push

@@ -31,6 +31,7 @@ public final class GameRuntime {
         if (regionId == null || regionId.isBlank()) throw new IllegalArgumentException("regionId is blank");
         this.regionId = regionId.trim().toLowerCase(java.util.Locale.ROOT);
         world = new GameWorld(entityIdBase);
+        scripts.api().setRegionId(this.regionId);
         scripts.bindWorld(world);
     }
 
