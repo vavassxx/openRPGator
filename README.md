@@ -1,34 +1,19 @@
-# openRPGator regions — step 5
+# openRPGator regions — step 6
 
-Overlay this archive on `asteria-regions-mainline` after step 4.
+Overlay this archive on `asteria-regions-mainline` after step 5, then run:
 
-This step wires the region runtime into `ServerHost` and exposes host-owned Lua transitions.
+    sh apply-step6.sh
 
-### What changes
+This is a small safety/ordering fix for the multi-region server:
 
-- `<data>/host/regions/*.rmap` is auto-discovered when present.
-- If no region maps exist, the old single `<data>/host/*.rmap` path remains supported.
-- Each connected player has a current `regionId`.
-- Lua gets `engine.transition(player, region, x, y [, z])`.
-- Portal transitions are authoritative and server-side.
-- Snapshots are filtered by each player's current region.
-- Each region receives only its own player IDs in `world.players()`.
-- Destination `MapPacket` is sent immediately after a transition; protocol is unchanged.
-- Persistent player state is NOT copied by the engine. Migration preserves only `EntityId`; the host reconstructs only the minimal session representation (`Name`/collider), while scripts remain responsible for persistent save/load and game state.
+- Lua transition requests now carry and validate their source region against the player's actual session region.
+- A stale Lua callback from another region cannot teleport an arbitrary player.
+- Portal transitions are resolved after the input's actions have been queued for the current region, avoiding an input-triggered transition changing the region before those queued actions are dispatched.
 
-### Apply
+The engine still does **not** copy generic ECS/player state during migration. Persistent state remains host/script-owned.
 
-1. Unzip over the branch checkout.
-2. Run:
+Then review and commit:
 
-    `sh apply-lua.sh`
-
-   The helper patches the existing `LuaApi.java` and removes itself afterward.
-3. Review the diff and build locally.
-4. Commit:
-
-    `git add .`
-    `git commit -m "server: wire multi-region player sessions"`
-    `git push`
-
-Do not add a generic ECS state snapshot here: that would violate the host-owned player-state contract.
+    git add .
+    git commit -m "server: validate region transitions"
+    git push

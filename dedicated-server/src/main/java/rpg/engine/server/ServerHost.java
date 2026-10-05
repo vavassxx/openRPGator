@@ -123,8 +123,8 @@ public final class ServerHost {
         for (RegionRuntime region : regions.all()) {
             region.runtime().setUiSink(uiSink());
             region.runtime().setPlayerStore(playerStore);
-            region.scripts().api().setRegionTransitionSink((ignored, id, target, x, y, z) ->
-                    transitionPlayer(id, target, new WorldPosition(x, y, z)));
+            region.scripts().api().setRegionTransitionSink((source, id, target, x, y, z) ->
+                    transitionPlayer(id, source, target, new WorldPosition(x, y, z)));
         }
 
         if (!pakFiles.isEmpty()) {
@@ -272,16 +272,24 @@ public final class ServerHost {
             if (x.has(Input.SECONDARY)) region.runtime().dispatchAction(entityId, "secondary");
             if (x.has(Input.INVENTORY)) region.runtime().dispatchAction(entityId, "inventory");
 
+            // Resolve the portal only after the input actions have been queued for this
+            // region. A transition must not make a queued action accidentally execute in
+            // the wrong region on the next tick.
             Optional<MapPortal> portal = regions.portalAt(region.id(), moved);
-            portal.ifPresent(p -> transitionPlayer(entityId, p.targetRegion(), p.targetPosition()));
+            portal.ifPresent(p -> transitionPlayer(entityId, region.id(), p.targetRegion(), p.targetPosition()));
             broadcastSnapshots();
         }
     }
 
-    private boolean transitionPlayer(long entityId, String targetRegion, WorldPosition target) {
+    private boolean transitionPlayer(long entityId, String expectedSourceRegion, String targetRegion, WorldPosition target) {
         Client c = clients.get(entityId);
         if (c == null) return false;
         String from = c.regionId;
+        String expected = expectedSourceRegion == null ? null : expectedSourceRegion.trim().toLowerCase(Locale.ROOT);
+        // A region's Lua runtime may only move players that currently belong to that
+        // runtime. This prevents a stale/cross-region script callback from teleporting
+        // an arbitrary connected player.
+        if (expected == null || !from.equals(expected)) return false;
         String to = targetRegion == null ? null : targetRegion.trim().toLowerCase(Locale.ROOT);
         if (to == null || to.isBlank() || from.equals(to)) return false;
         RegionRuntime destination = regions.find(to).orElse(null);
