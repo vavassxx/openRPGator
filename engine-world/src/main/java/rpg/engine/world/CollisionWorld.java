@@ -8,11 +8,18 @@ import java.util.*;
 /** Lightweight authoritative 2D collision with optional finite vertical wall segments. */
 public final class CollisionWorld {
     private final WorldRegistry registry;
+    private volatile TileGrid tiles;
     public CollisionWorld(WorldRegistry r) { registry = r; }
+
+    /** Installs the blocked-tile grid derived from the loaded map; null disables tile collision. */
+    public void setTileGrid(TileGrid grid) { this.tiles = grid; }
+    public TileGrid tileGrid() { return tiles; }
 
     public boolean canOccupy(EntityId moving, WorldPosition p) {
         var c = registry.get(moving, Collider.class);
         if (c.isEmpty()) return true;
+        TileGrid grid = tiles;
+        if (grid != null && grid.overlaps(c.get(), p)) return false;
         for (var e : registry.entities()) {
             if (e.equals(moving)) continue;
             var oc = registry.get(e, Collider.class);
