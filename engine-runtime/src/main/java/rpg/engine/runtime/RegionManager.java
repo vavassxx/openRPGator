@@ -87,15 +87,9 @@ public final class RegionManager {
     public Optional<MapPortal> portalAt(String sourceId, WorldPosition position) {
         RegionRuntime source = require(sourceId);
         var map = source.map();
-        return map == null ? Optional.empty() : map.portals().stream()
-                .filter(portal -> distanceSquared(portal.position(), position) <= portal.radius() * portal.radius())
-                .findFirst();
+        return map == null ? Optional.empty() : map.portalAt(position);
     }
 
-    private static double distanceSquared(WorldPosition a, WorldPosition b) {
-        double dx = a.x() - b.x(), dy = a.y() - b.y();
-        return dx * dx + dy * dy;
-    }
     private static String normalize(String raw) {
         if (raw == null) throw new IllegalArgumentException("region id is null");
         return raw.trim().toLowerCase(Locale.ROOT);
