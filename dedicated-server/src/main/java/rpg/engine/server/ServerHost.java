@@ -298,6 +298,7 @@ public final class ServerHost {
             RegionRuntime region = regions.require(c.regionId);
             var e = new EntityId(entityId);
             var t = region.world().entities().get(e, Transform.class).orElseThrow();
+            WorldPosition pos = t.position();
 
             // Authoritative movement: the server integrates at the client's own packet cadence
             // using monotonic time, clamped so a burst of stale packets cannot push the player
@@ -312,16 +313,17 @@ public final class ServerHost {
                 double dt = Math.max(0.001, Math.min(0.1, (now - c.lastInputNanos) / 1e9));
                 c.lastInputNanos = now;
                 double step = playerSpeed * dt;
-                var desired = new WorldPosition(t.position().x() + dx * step,
-                        t.position().y() + dy * step, t.position().elevation());
+                var desired = new WorldPosition(pos.x() + dx * step,
+                        pos.y() + dy * step, pos.elevation());
                 var moved = region.world().collision().move(e, desired);
                 region.world().entities().set(e, new Transform(moved, t.rotation()));
+                pos = moved;
             }
 
             // Semantic actions share one per-client token bucket; interaction is a cheap
             // proximity query but still guarded so hold-spam cannot flood the world query.
             if (x.has(Input.INTERACT) && c.actions.tryAcquire())
-                region.world().interactTarget(t.position(), 2.0).ifPresent(target ->
+                region.world().interactTarget(pos, 2.0).ifPresent(target ->
                         region.world().events().emit(new InteractRequestedEvent(e, target)));
             if (x.has(Input.PRIMARY) && c.actions.tryAcquire()) region.runtime().dispatchAction(entityId, "primary");
             if (x.has(Input.SECONDARY) && c.actions.tryAcquire()) region.runtime().dispatchAction(entityId, "secondary");
@@ -330,7 +332,7 @@ public final class ServerHost {
             // Resolve the portal only after the input actions have been queued for this
             // region. A transition must not make a queued action accidentally execute in
             // the wrong region on the next tick.
-            Optional<MapPortal> portal = regions.portalAt(region.id(), t.position());
+            Optional<MapPortal> portal = regions.portalAt(region.id(), pos);
             portal.ifPresent(p -> transitionPlayer(entityId, region.id(), p.targetRegion(), p.targetPosition()));
             broadcastSnapshots();
         }
