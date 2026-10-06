@@ -202,9 +202,13 @@ public final class ServerHost {
                 Packet q = Protocol.read(in);
                 if (q instanceof Input x) applyInput(client.entityId, x);
                 else if (q instanceof DialogResponse r) {
-                    synchronized (worldLock) currentRuntime(client.entityId).respondDialog(r.dialogId(), r.choice());
+                    synchronized (worldLock) {
+                        currentRuntime(client.entityId).respondDialog(r.dialogId(), r.choice());
+                    }
                 } else if (q instanceof Cmd c) {
-                    synchronized (worldLock) currentRuntime(client.entityId).dispatchCommand(client.entityId, c.code(), c.arg());
+                    synchronized (worldLock) {
+                        currentRuntime(client.entityId).dispatchCommand(client.entityId, c.code(), c.arg());
+                    }
                 }
             }
         } catch (Exception ignored) {
