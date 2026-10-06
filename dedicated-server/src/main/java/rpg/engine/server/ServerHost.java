@@ -23,11 +23,28 @@ import java.util.concurrent.*;
  * region migration moves only the region-local ECS representation.
  */
 public final class ServerHost {
-    public record Config(Path map, List<Path> paks, int port, int tickHz, Path dataDir) {
+    /** Default maximum players' movement speed in world tiles per second. */
+    public static final double DEFAULT_PLAYER_SPEED = 6.0;
+    /** Default snapshot interest radius in world tiles (entities beyond it are not streamed). */
+    public static final double DEFAULT_VIEW_RADIUS = 24.0;
+    static final int MAX_INPUT_ACTIONS_PER_SECOND = 24;
+    static final int MAX_NAME_LENGTH = 24;
+
+    public record Config(Path map, List<Path> paks, int port, int tickHz, Path dataDir,
+                         double playerSpeed, double viewRadius) {
         public Config {
             if (paks == null) paks = List.of();
             if (tickHz <= 0) tickHz = ServerConfig.DEFAULT_TICK_HZ;
             tickHz = Math.max(1, Math.min(240, tickHz));
+            if (!(playerSpeed > 0) || !Double.isFinite(playerSpeed))
+                throw new IllegalArgumentException("invalid player speed: " + playerSpeed);
+            if (!(viewRadius > 0) || !Double.isFinite(viewRadius))
+                throw new IllegalArgumentException("invalid view radius: " + viewRadius);
+        }
+
+        /** Backward-compatible constructor using the default movement speed and view radius. */
+        public Config(Path map, List<Path> paks, int port, int tickHz, Path dataDir) {
+            this(map, paks, port, tickHz, dataDir, DEFAULT_PLAYER_SPEED, DEFAULT_VIEW_RADIUS);
         }
     }
 
@@ -38,7 +55,11 @@ public final class ServerHost {
 
     private final Listener listener;
     private final Map<Long, Client> clients = new ConcurrentHashMap<>();
+    /** Canonical (case-insensitive) character name → entity id; guards against duplicate logins. */
+    private final Map<String, Long> activeNames = new ConcurrentHashMap<>();
     private final RegionManager regions = new RegionManager();
+    private volatile double playerSpeed = DEFAULT_PLAYER_SPEED;
+    private volatile double viewRadius = DEFAULT_VIEW_RADIUS;
     private ExecutorService exec;
     private volatile boolean running;
     private ServerSocket server;
@@ -80,6 +101,8 @@ public final class ServerHost {
 
     public synchronized void start(Config cfg) throws IOException {
         if (running) return;
+        playerSpeed = cfg.playerSpeed();
+        viewRadius = cfg.viewRadius();
         regions.clear();
         Path hostDir = cfg.dataDir() == null ? null : cfg.dataDir().resolve("host");
         if (hostDir != null) Files.createDirectories(hostDir);
@@ -192,7 +215,7 @@ public final class ServerHost {
             OutputStream out = s.getOutputStream();
             Packet hello = Protocol.read(in);
             if (!(hello instanceof Hello h)) return;
-            synchronized (worldLock) { client = spawnPlayer(h.name(), out, s); }
+            synchronized (worldLock) { client = spawnPlayer(h.name(), out); }
             if (!pakFiles.isEmpty()) PakStreamer.send(out, pakFiles);
             Protocol.write(out, new Welcome(client.entityId));
             sendFonts(out, fontDir);
@@ -225,19 +248,29 @@ public final class ServerHost {
         }
     }
 
-    private Client spawnPlayer(String name, OutputStream out, Socket socket) {
+    private Client spawnPlayer(String rawName, OutputStream out) {
         RegionRuntime region = initialRegion();
         if (region == null) throw new IllegalStateException("server has no loaded regions");
+        String name = normalizePlayerName(rawName);
+        String key = canonicalPlayerKey(name);
+        if (activeNames.putIfAbsent(key, 1L) != null)
+            throw new IllegalArgumentException("character already online: " + name);
         long id = region.world().spawn().value();
-        EntityId e = new EntityId(id);
-        region.world().entities().set(e, new Name(name));
-        WorldPosition spawn = region.scripts().api().spawnPoint();
-        region.world().entities().set(e, new Transform(spawn, 0));
-        region.world().entities().set(e, new CircleCollider(0.35));
-        return new Client(id, name, region.id(), socket, out);
+        try {
+            EntityId e = new EntityId(id);
+            region.world().entities().set(e, new Name(name));
+            WorldPosition spawn = region.scripts().api().spawnPoint();
+            region.world().entities().set(e, new Transform(spawn, 0));
+            region.world().entities().set(e, new CircleCollider(0.35));
+            return new Client(id, name, region.id(), out);
+        } catch (RuntimeException failure) {
+            activeNames.remove(key);
+            throw failure;
+        }
     }
 
     private void destroyPlayer(Client c) {
+        activeNames.remove(canonicalPlayerKey(c.name));
         RegionRuntime region = regions.find(c.regionId).orElse(null);
         if (region != null) region.world().entities().destroy(new EntityId(c.entityId));
     }
@@ -265,21 +298,39 @@ public final class ServerHost {
             RegionRuntime region = regions.require(c.regionId);
             var e = new EntityId(entityId);
             var t = region.world().entities().get(e, Transform.class).orElseThrow();
-            var desired = new WorldPosition(t.position().x() + x.dx() * 0.1,
-                    t.position().y() + x.dy() * 0.1, t.position().elevation());
-            var moved = region.world().collision().move(e, desired);
-            region.world().entities().set(e, new Transform(moved, t.rotation()));
-            if (x.has(Input.INTERACT))
-                region.world().interactTarget(moved, 2.0).ifPresent(target ->
+
+            // Authoritative movement: the server integrates at the client's own packet cadence
+            // using monotonic time, clamped so a burst of stale packets cannot push the player
+            // farther than the configured speed allows. Diagonal inputs are normalized.
+            double dx = x.dx(), dy = x.dy();
+            if (!Double.isFinite(dx)) dx = 0;
+            if (!Double.isFinite(dy)) dy = 0;
+            double len = Math.hypot(dx, dy);
+            if (len > 0) {
+                if (len > 1.0) { dx /= len; dy /= len; }
+                long now = System.nanoTime();
+                double dt = Math.max(0.001, Math.min(0.1, (now - c.lastInputNanos) / 1e9));
+                c.lastInputNanos = now;
+                double step = playerSpeed * dt;
+                var desired = new WorldPosition(t.position().x() + dx * step,
+                        t.position().y() + dy * step, t.position().elevation());
+                var moved = region.world().collision().move(e, desired);
+                region.world().entities().set(e, new Transform(moved, t.rotation()));
+            }
+
+            // Semantic actions share one per-client token bucket; interaction is a cheap
+            // proximity query but still guarded so hold-spam cannot flood the world query.
+            if (x.has(Input.INTERACT) && c.actions.tryAcquire())
+                region.world().interactTarget(t.position(), 2.0).ifPresent(target ->
                         region.world().events().emit(new InteractRequestedEvent(e, target)));
-            if (x.has(Input.PRIMARY)) region.runtime().dispatchAction(entityId, "primary");
-            if (x.has(Input.SECONDARY)) region.runtime().dispatchAction(entityId, "secondary");
-            if (x.has(Input.INVENTORY)) region.runtime().dispatchAction(entityId, "inventory");
+            if (x.has(Input.PRIMARY) && c.actions.tryAcquire()) region.runtime().dispatchAction(entityId, "primary");
+            if (x.has(Input.SECONDARY) && c.actions.tryAcquire()) region.runtime().dispatchAction(entityId, "secondary");
+            if (x.has(Input.INVENTORY) && c.actions.tryAcquire()) region.runtime().dispatchAction(entityId, "inventory");
 
             // Resolve the portal only after the input actions have been queued for this
             // region. A transition must not make a queued action accidentally execute in
             // the wrong region on the next tick.
-            Optional<MapPortal> portal = regions.portalAt(region.id(), moved);
+            Optional<MapPortal> portal = regions.portalAt(region.id(), t.position());
             portal.ifPresent(p -> transitionPlayer(entityId, region.id(), p.targetRegion(), p.targetPosition()));
             broadcastSnapshots();
         }
@@ -331,9 +382,22 @@ public final class ServerHost {
             }).filter(Objects::nonNull).toList();
             byRegion.put(region.id(), states);
         }
+        final double rr = viewRadius * viewRadius;
         for (Client c : clients.values()) {
-            List<Snapshot.EntityState> states = byRegion.getOrDefault(c.regionId, List.of());
-            c.send(new Snapshot(states));
+            List<Snapshot.EntityState> all = byRegion.getOrDefault(c.regionId, List.of());
+            if (all.isEmpty()) { c.send(new Snapshot(List.of())); continue; }
+            RegionRuntime region = regions.find(c.regionId).orElse(null);
+            var viewer = region == null ? null
+                    : region.world().entities().get(new EntityId(c.entityId), Transform.class).orElse(null);
+            if (viewer == null) { c.send(new Snapshot(List.of())); continue; }
+            final double vx = viewer.position().x(), vy = viewer.position().y();
+            List<Snapshot.EntityState> visible = new ArrayList<>(all.size());
+            for (Snapshot.EntityState s : all) {
+                if (s.id() == c.entityId) { visible.add(s); continue; } // own entity always sent
+                double dx = s.x() - vx, dy = s.y() - vy;
+                if (dx * dx + dy * dy <= rr) visible.add(s);
+            }
+            c.send(new Snapshot(visible));
         }
     }
 
@@ -368,13 +432,74 @@ public final class ServerHost {
         } catch(IOException e){listener.error("Font streaming failed: "+e.getMessage());}
     }
 
+    /**
+     * Normalizes a player-supplied character name: trims, collapses inner whitespace, strips
+     * control characters and enforces a maximum length. Throws when the result is unusable.
+     */
+    static String normalizePlayerName(String raw) {
+        if (raw == null) throw new IllegalArgumentException("character name is null");
+        // 1) trim, 2) drop control characters entirely, 3) collapse any remaining whitespace runs.
+        String s = raw.trim();
+        StringBuilder clean = new StringBuilder(s.length());
+        for (int i = 0; i < s.length(); i++) {
+            char ch = s.charAt(i);
+            if (ch >= 0x20) clean.append(ch);
+        }
+        s = clean.toString().replaceAll("\\s+", " ").trim();
+        if (s.isEmpty()) throw new IllegalArgumentException("character name has no usable characters");
+        if (s.length() > MAX_NAME_LENGTH)
+            throw new IllegalArgumentException("character name too long: " + raw);
+        return s;
+    }
+
+    /** Canonical identity of a character name: case-insensitive so saves and logins never collide by case. */
+    static String canonicalPlayerKey(String name) {
+        return name.toLowerCase(Locale.ROOT);
+    }
+
+    /**
+     * A token bucket, refilled at {@code capacity} tokens per second. Guards semantic actions so a
+     * misbehaving client can submit at most capacity actions per second instead of one per packet.
+     */
+    static final class ActionLimiter {
+        private final double capacity;
+        private double tokens;
+        private long lastRefillNanos;
+
+        ActionLimiter(double capacity) {
+            if (!(capacity > 0)) throw new IllegalArgumentException("invalid capacity: " + capacity);
+            this.capacity = capacity;
+            this.tokens = capacity;
+            this.lastRefillNanos = System.nanoTime();
+        }
+
+        synchronized boolean tryAcquire() {
+            long now = System.nanoTime();
+            tokens = Math.min(capacity, tokens + (now - lastRefillNanos) / 1e9 * capacity);
+            lastRefillNanos = now;
+            if (tokens >= 1.0) {
+                tokens -= 1.0;
+                return true;
+            }
+            return false;
+        }
+    }
+
     private static final class Client {
         final long entityId;
         final String name;
         volatile String regionId;
         final OutputStream out;
+        final ActionLimiter actions = new ActionLimiter(MAX_INPUT_ACTIONS_PER_SECOND);
+        volatile long lastInputNanos;
         volatile boolean dismissed;
-        Client(long entityId,String name,String regionId,Socket socket,OutputStream out){this.entityId=entityId;this.name=name;this.regionId=regionId;this.out=out;}
+        Client(long entityId, String name, String regionId, OutputStream out) {
+            this.entityId = entityId;
+            this.name = name;
+            this.regionId = regionId;
+            this.out = out;
+            this.lastInputNanos = System.nanoTime();
+        }
         synchronized void send(Packet p){if(dismissed)return;try{Protocol.write(out,p);}catch(IOException ignored){dismissed=true;}}
         void dismiss(){dismissed=true;}
     }
