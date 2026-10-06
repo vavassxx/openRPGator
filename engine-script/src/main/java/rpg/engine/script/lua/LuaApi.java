@@ -406,9 +406,13 @@ public final class LuaApi {
         return findId(raw);
     }
 
+    /** Persistence key for a player: the name lowercased so saves are case-insensitive. */
     private String playerKey(long id) {
         if (world == null) return null;
-        return world.entities().get(new EntityId(id), Name.class).map(Name::value).orElse(null);
+        return world.entities().get(new EntityId(id), Name.class)
+                .map(Name::value)
+                .map(n -> n.toLowerCase(Locale.ROOT))
+                .orElse(null);
     }
 
     /** Extracts the entity id from a facade table (calls {@code facade.id()}) or a raw number. */
