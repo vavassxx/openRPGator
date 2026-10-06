@@ -11,6 +11,7 @@ import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import org.luaj.vm2.LuaError;
@@ -21,6 +22,7 @@ public final class GameRuntime {
     private final GameWorld world;
     private final LuaRuntime scripts = new LuaRuntime();
     private final ConcurrentLinkedQueue<Runnable> pendingActions = new ConcurrentLinkedQueue<>();
+    private volatile Path worldScript;
     private RMap map;
 
     public GameRuntime() { this("default", 0); }
@@ -44,6 +46,13 @@ public final class GameRuntime {
     public void setPlayerStore(PlayerStore store) { scripts.api().setPlayerStore(store); }
     public void setPlayers(java.util.Collection<Long> playerIds) { scripts.api().setPlayers(playerIds); }
 
+    /**
+     * Overrides the world controller script. When null (the default) the runtime auto-loads
+     * {@code <map-dir>/world.lua} if present. The controller runs once at map load, region-local,
+     * with {@code engine}/{@code world} in scope — the same contract as the documented host model.
+     */
+    public void setWorldScript(Path script) { this.worldScript = script; }
+
     public void respondDialog(long dialogId, int choice) {
         pendingActions.add(() -> scripts.api().respondDialog(dialogId, choice));
     }
@@ -63,6 +72,7 @@ public final class GameRuntime {
     public void loadMap(Path path) throws IOException {
         RMap m = RMapIO.read(path);
         this.map = m;
+        installCollisionGrid(m);
         scripts.bindMap(m);
         Path base = path.getParent();
         for (MapEntity e : m.entities()) {
@@ -81,6 +91,45 @@ public final class GameRuntime {
                     System.err.println("[Lua] script " + scriptPath + " failed: " + ex.getMessage());
                 }
             }
+        }
+        loadWorldController(base);
+    }
+
+    /**
+     * Builds and installs the authoritative blocked-tile grid from every map layer marked as
+     * collision (tile id 0 = passable, any other id = blocked, OR-ed across collision layers).
+     * Maps without a collision layer keep the previous wall-only behaviour and stay unbounded.
+     */
+    private void installCollisionGrid(RMap m) {
+        boolean any = false;
+        boolean[] blocked = new boolean[m.width() * m.height()];
+        for (TileLayer layer : m.layers()) {
+            if (!layer.collision()) continue;
+            any = true;
+            for (int i = 0; i < blocked.length; i++) {
+                if (layer.tiles()[i] != 0) blocked[i] = true;
+            }
+        }
+        world.collision().setTileGrid(any ? new rpg.engine.world.TileGrid(
+                m.width(), m.height(), m.tileSize(), blocked) : null);
+    }
+
+    /** Loads the world controller: the explicit override when set, otherwise {@code <map-dir>/world.lua}. */
+    private void loadWorldController(Path base) throws IOException {
+        Path script = worldScript;
+        boolean explicit = script != null;
+        if (script == null) {
+            if (base == null) return;
+            script = base.resolve("world.lua");
+        }
+        if (!Files.isRegularFile(script)) {
+            if (explicit) System.err.println("[Lua] world script not found: " + script);
+            return;
+        }
+        try {
+            scripts.execute(readUtf8(script), "world:" + script.getFileName());
+        } catch (LuaError ex) {
+            System.err.println("[Lua] world script " + script + " failed: " + ex.getMessage());
         }
     }
 
