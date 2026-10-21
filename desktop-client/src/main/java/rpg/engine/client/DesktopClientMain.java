@@ -108,6 +108,8 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
     private volatile boolean connected;
     /** When enabled, the camera continuously follows the local player. */
     private boolean cameraFollow = true;
+    private final Map<Long, SmoothPosition> smoothPositions = new HashMap<>();
+    private record SmoothPosition(double x, double y, double elevation, long updatedAt) {}
 
     private final List<ToastRecord> toasts = new CopyOnWriteArrayList<>();
     private volatile ActiveDialog activeDialog;
@@ -563,6 +565,28 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
 
         // ── Camera ───────────────────────────────────────────────
         Snapshot snap = latestSnapshot.get();
+        long now = System.nanoTime();
+        List<Snapshot.EntityState> displayed = new ArrayList<>(snap.entities().size());
+        Set<Long> seen = new HashSet<>();
+        for (Snapshot.EntityState e : snap.entities()) {
+            seen.add(e.id());
+            SmoothPosition old = smoothPositions.get(e.id());
+            double x = e.x(), y = e.y(), elevation = e.elevation();
+            if (old != null) {
+                double distance = Math.hypot(x - old.x(), y - old.y());
+                if (distance <= 4.0) {
+                    double dt = Math.max(0.0, Math.min(0.25, (now - old.updatedAt()) / 1_000_000_000.0));
+                    double alpha = 1.0 - Math.exp(-dt / 0.075);
+                    x = old.x() + (x - old.x()) * alpha;
+                    y = old.y() + (y - old.y()) * alpha;
+                    elevation = old.elevation() + (elevation - old.elevation()) * alpha;
+                }
+            }
+            smoothPositions.put(e.id(), new SmoothPosition(x, y, elevation, now));
+            displayed.add(new Snapshot.EntityState(e.id(), x, y, elevation, e.sprite(), e.scale()));
+        }
+        smoothPositions.keySet().retainAll(seen);
+        snap = new Snapshot(displayed);
         Snapshot.EntityState camTarget = null;
         long myId = localPlayerId.get();
         for (Snapshot.EntityState e : snap.entities()) {

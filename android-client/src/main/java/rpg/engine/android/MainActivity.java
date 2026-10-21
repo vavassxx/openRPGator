@@ -60,7 +60,7 @@ public final class MainActivity extends Activity implements ClientSession.Listen
         session = new ClientSession(this, appStorage.pakCacheDir());
         logger = AppLogger.get(this);
         logger.info("Application started");
-        localServer = new LocalServerBackend(s -> runOnUiThread(() -> status.setText(s)));
+        localServer = new LocalServerBackend(s -> runOnUiThread(() -> { if (status != null) status.setText(s); }));
         showMainMenu();
     }
 
@@ -91,31 +91,82 @@ public final class MainActivity extends Activity implements ClientSession.Listen
     private void showMainMenu() {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setGravity(Gravity.CENTER);
-        root.setBackgroundColor(Color.rgb(18, 19, 22));
-        int pad = dp(24);
-        root.setPadding(pad, pad, pad, pad);
+        root.setBackgroundColor(Color.rgb(15, 17, 22));
+        root.setPadding(dp(22), dp(22), dp(22), dp(22));
 
+        LinearLayout heading = new LinearLayout(this);
+        heading.setOrientation(LinearLayout.VERTICAL);
+        heading.setPadding(0, dp(8), 0, dp(22));
         TextView title = new TextView(this);
         title.setText("openRPGator");
-        title.setTextColor(Color.WHITE);
-        title.setTextSize(28);
-        title.setGravity(Gravity.CENTER);
-        title.setPadding(0, 0, 0, dp(32));
-        root.addView(title);
+        title.setTextColor(Color.rgb(242, 244, 250));
+        title.setTextSize(30);
+        title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        TextView subtitle = new TextView(this);
+        subtitle.setText("A world-building RPG engine");
+        subtitle.setTextColor(Color.rgb(145, 153, 170));
+        subtitle.setTextSize(14);
+        subtitle.setPadding(0, dp(5), 0, 0);
+        heading.addView(title);
+        heading.addView(subtitle);
+        root.addView(heading);
 
-        String[] labels = {"Play", "Map editor", "Settings", "Exit"};
-        for (String label : labels) {
-            Button b = new Button(this);
-            b.setText(label);
-            b.setTextSize(16);
-            b.setOnClickListener(v -> onMenu(label));
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, dp(56));
-            lp.setMargins(0, dp(6), 0, dp(6));
-            root.addView(b, lp);
-        }
+        TextView section = new TextView(this);
+        section.setText("GET STARTED");
+        section.setTextColor(Color.rgb(115, 169, 255));
+        section.setTextSize(11);
+        section.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        section.setLetterSpacing(0.12f);
+        section.setPadding(0, dp(6), 0, dp(8));
+        root.addView(section);
+
+        addMenuCard(root, "Play", "Connect to a server or start a local world", true);
+        addMenuCard(root, "Map editor", "Create and edit .rmap maps", false);
+        addMenuCard(root, "Settings", "Configure client preferences", false);
+        View spacer = new View(this);
+        root.addView(spacer, new LinearLayout.LayoutParams(1, 0, 1));
+        TextView footer = new TextView(this);
+        footer.setText("Android client  •  Local hosting supported");
+        footer.setTextColor(Color.rgb(104, 111, 126));
+        footer.setTextSize(12);
+        footer.setGravity(Gravity.CENTER);
+        footer.setPadding(0, dp(14), 0, dp(8));
+        root.addView(footer, new LinearLayout.LayoutParams(-1, -2));
+
+        Button exit = actionButton("Exit", "Close openRPGator");
+        root.addView(exit, new LinearLayout.LayoutParams(-1, dp(46)));
+        exit.setOnClickListener(v -> onMenu("Exit"));
         setContentView(root);
     }
+
+    private void addMenuCard(LinearLayout root, String label, String description, boolean primary) {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setGravity(Gravity.CENTER_VERTICAL);
+        card.setPadding(dp(16), dp(10), dp(16), dp(10));
+        card.setBackgroundColor(primary ? Color.rgb(35, 54, 83) : Color.rgb(27, 30, 38));
+        card.setElevation(dp(2));
+        TextView title = new TextView(this);
+        title.setText(label);
+        title.setTextColor(Color.rgb(242, 244, 250));
+        title.setTextSize(17);
+        title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        TextView detail = new TextView(this);
+        detail.setText(description);
+        detail.setTextColor(Color.rgb(164, 173, 190));
+        detail.setTextSize(12);
+        detail.setPadding(0, dp(3), 0, 0);
+        card.addView(title);
+        card.addView(detail);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, dp(76));
+        lp.setMargins(0, 0, 0, dp(10));
+        root.addView(card, lp);
+        card.setOnClickListener(v -> onMenu(label));
+        card.setContentDescription(label + ". " + description);
+        card.setFocusable(true);
+        card.setClickable(true);
+    }
+
 
     private void onMenu(String label) {
         logger.info("Main menu: " + label);
@@ -760,6 +811,8 @@ public final class MainActivity extends Activity implements ClientSession.Listen
         private static final long TOAST_DURATION_MS = 4000;
         private final List<ToastRecord> toasts = new ArrayList<>();
         private record ToastRecord(String text, long at) {}
+        private final Map<Long, SmoothPosition> smoothPositions = new HashMap<>();
+        private record SmoothPosition(double x, double y, double elevation, long updatedAt) {}
         /** Ground layer streamed by the server (MapPacket); null → empty floor (no connection). */
         private volatile int[] netTiles;
         private volatile int netW, netH;
@@ -814,6 +867,31 @@ public final class MainActivity extends Activity implements ClientSession.Listen
         }
         void setSnapshot(Snapshot s) { snapshot = s; invalidate(); }
         @Override protected void onDraw(Canvas c) {
+            Snapshot raw = snapshot;
+            long now = System.nanoTime();
+            List<Snapshot.EntityState> displayed = new ArrayList<>(raw.entities().size());
+            Set<Long> seen = new HashSet<>();
+            for (Snapshot.EntityState e : raw.entities()) {
+                seen.add(e.id());
+                SmoothPosition old = smoothPositions.get(e.id());
+                double x = e.x(), y = e.y(), elevation = e.elevation();
+                if (old != null) {
+                    double distance = Math.hypot(x - old.x(), y - old.y());
+                    // Large discontinuities are map/region teleports or respawns: snap instead
+                    // of drawing a character travelling across the whole world.
+                    if (distance <= 4.0) {
+                        double dt = Math.max(0.0, Math.min(0.25, (now - old.updatedAt()) / 1_000_000_000.0));
+                        double alpha = 1.0 - Math.exp(-dt / 0.075);
+                        x = old.x() + (x - old.x()) * alpha;
+                        y = old.y() + (y - old.y()) * alpha;
+                        elevation = old.elevation() + (elevation - old.elevation()) * alpha;
+                    }
+                }
+                smoothPositions.put(e.id(), new SmoothPosition(x, y, elevation, now));
+                displayed.add(new Snapshot.EntityState(e.id(), x, y, elevation, e.sprite(), e.scale()));
+            }
+            smoothPositions.keySet().retainAll(seen);
+            snapshot = new Snapshot(displayed);
             c.drawColor(Color.rgb(36, 48, 42));
             // The paint is shared with the widget/toast overlay, which leaves semi-transparent
             // colors behind (toast fade-out ends near alpha 0). Tiles and sprites are drawn with

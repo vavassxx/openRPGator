@@ -1,6 +1,6 @@
 # Status
 
-Target version: **0.4.0**. This repository is a real, buildable foundation/vertical slice, not a
+Target version: **0.5.0**. This repository is a real, buildable foundation/vertical slice, not a
 collection of placeholder classes.
 
 ## Implemented
@@ -32,7 +32,8 @@ collection of placeholder classes.
 ## Not yet production-complete
 
 - Full texture atlas and animation system (single-frame `.pak` sprites/tiles work end-to-end).
-- Prediction/interpolation and robust reconnect/authentication.
+- Client-side prediction is not implemented; snapshot smoothing is visual-only and server state remains authoritative.
+- Robust reconnect/authentication.
 - Packaging/signing for each desktop target.
 - Sandbox policy (full LuaJ access by design for the **host** runtime; host responsibility per
   project policy — server-pushed *client* scripts do run in a restricted `ui.*` sandbox).
@@ -42,8 +43,6 @@ collection of placeholder classes.
 
 Findings from running the scripted demo host ([examples/host/README.md](../examples/host/README.md)):
 
-- **Tile collisions.** The `.rmap` `collision` layer does not yet affect movement —
-  `CollisionWorld` only considers entities; walls are passable.
 - **Animations/atlases.** Single-frame sprites stream and render; no walk cycles or state-driven
   sprite swaps.
 - **Inventory/combat.** Purchase and chests are toasts only; there is no inventory component.
@@ -57,3 +56,6 @@ Findings from running the scripted demo host ([examples/host/README.md](../examp
 - **Android device verification.** The game screen works end-to-end in the guest view (map floor,
   HUD, toasts, dialogs, controls) but still wants interactive testing on a real device (CI is
   SDK-only).
+- **Region integration verification.** Region catalog loading, portal transitions and state
+  migration need end-to-end host testing; migration preserves entity identity but game-specific
+  inventory/quest/progression persistence remains the host's responsibility.
