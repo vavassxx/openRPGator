@@ -18,6 +18,9 @@ import org.luaj.vm2.LuaError;
 
 /** Region-local simulation runtime. Host/session state lives outside this class. */
 public final class GameRuntime {
+    /** One map cell spans exactly one world unit; pixel sizes belong to the renderer only. */
+    private static final double WORLD_UNITS_PER_TILE = 1.0;
+
     private final String regionId;
     private final GameWorld world;
     private final LuaRuntime scripts = new LuaRuntime();
@@ -110,8 +113,10 @@ public final class GameRuntime {
                 if (layer.tiles()[i] != 0) blocked[i] = true;
             }
         }
+        // World positions are expressed in tiles; RMap.tileSize() is the render tile size in
+        // pixels and must never leak into the simulation coordinate space.
         world.collision().setTileGrid(any ? new rpg.engine.world.TileGrid(
-                m.width(), m.height(), m.tileSize(), blocked) : null);
+                m.width(), m.height(), WORLD_UNITS_PER_TILE, blocked) : null);
     }
 
     /** Loads the world controller: the explicit override when set, otherwise {@code <map-dir>/world.lua}. */

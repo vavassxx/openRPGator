@@ -37,6 +37,7 @@ public final class MainActivity extends Activity implements ClientSession.Listen
     private static final int PICK_STORAGE = 9001;
     /** Connect/Disconnect toggle button on the game screen; label follows {@link #connected}. */
     private Button connectButton;
+    private Button localServerButton;
     private volatile boolean connected;
     /** Client-only camera mode: when enabled the camera stays centered on our entity. */
     private boolean cameraFollow = true;
@@ -120,7 +121,7 @@ public final class MainActivity extends Activity implements ClientSession.Listen
         section.setPadding(0, dp(6), 0, dp(8));
         root.addView(section);
 
-        addMenuCard(root, "Play", "Connect to a server or start a local world", true);
+        addMenuCard(root, "Servers", "Join a server or host a local world", true);
         addMenuCard(root, "Map editor", "Create and edit .rmap maps", false);
         addMenuCard(root, "Settings", "Configure client preferences", false);
         View spacer = new View(this);
@@ -168,10 +169,83 @@ public final class MainActivity extends Activity implements ClientSession.Listen
     }
 
 
+    private void showServerMenu() {
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setBackgroundColor(Color.rgb(15, 17, 22));
+        root.setPadding(dp(22), dp(22), dp(22), dp(22));
+
+        TextView title = new TextView(this);
+        title.setText("Servers");
+        title.setTextColor(Color.rgb(242, 244, 250));
+        title.setTextSize(28);
+        title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        root.addView(title);
+
+        TextView subtitle = new TextView(this);
+        subtitle.setText("Connect to a saved address or start the world in data/host.");
+        subtitle.setTextColor(Color.rgb(145, 153, 170));
+        subtitle.setTextSize(13);
+        subtitle.setPadding(0, dp(5), 0, dp(18));
+        root.addView(subtitle);
+
+        root.addView(sectionLabel("SERVER ADDRESS"));
+        EditText host = field("Address", prefs.getString("last_host", "127.0.0.1"));
+        EditText port = field("Port", prefs.getString("last_port", "27991"));
+        EditText name = field("Character name", prefs.getString("last_name", "player"));
+        root.addView(host, new LinearLayout.LayoutParams(-1, dp(52)));
+        root.addView(port, new LinearLayout.LayoutParams(-1, dp(52)));
+        root.addView(name, new LinearLayout.LayoutParams(-1, dp(52)));
+
+        Button connect = actionButton("Connect", "Connect to this server");
+        connect.setTextSize(14);
+        root.addView(connect, new LinearLayout.LayoutParams(-1, dp(50)));
+        connect.setOnClickListener(v -> {
+            String h = host.getText().toString().trim();
+            String p = port.getText().toString().trim();
+            String n = name.getText().toString().trim();
+            try {
+                int portNumber = Integer.parseInt(p);
+                if (h.isEmpty() || n.isEmpty() || portNumber < 1 || portNumber > 65535)
+                    throw new IllegalArgumentException("Enter a host, name, and valid port (1–65535)");
+                prefs.edit().putString("last_host", h).putString("last_port", p)
+                    .putString("last_name", n).apply();
+                showGame();
+                if (connectButton != null) connectButton.performClick();
+            } catch (Exception e) {
+                new AlertDialog.Builder(this).setTitle("Cannot connect")
+                    .setMessage(e.getMessage() == null ? "Invalid server address or port" : e.getMessage())
+                    .setPositiveButton("OK", null).show();
+            }
+        });
+
+        Button local = actionButton("Host local world", "Start the local server and join it");
+        local.setTextSize(14);
+        LinearLayout.LayoutParams localLp = new LinearLayout.LayoutParams(-1, dp(50));
+        localLp.topMargin = dp(8);
+        root.addView(local, localLp);
+        local.setOnClickListener(v -> {
+            String p = prefs.getString("last_port", "27991");
+            String n = prefs.getString("last_name", "player");
+            prefs.edit().putString("last_host", "127.0.0.1").putString("last_port", p)
+                .putString("last_name", n).apply();
+            showGame();
+            if (localServerButton != null) localServerButton.performClick();
+            if (connectButton != null) connectButton.performClick();
+        });
+
+        View spacer = new View(this);
+        root.addView(spacer, new LinearLayout.LayoutParams(1, 0, 1));
+        Button back = actionButton("Back to menu", "Return to the main menu");
+        root.addView(back, new LinearLayout.LayoutParams(-1, dp(48)));
+        back.setOnClickListener(v -> showMainMenu());
+        setContentView(root);
+    }
+
     private void onMenu(String label) {
         logger.info("Main menu: " + label);
         switch (label) {
-            case "Play": showGame(); break;
+            case "Servers": showServerMenu(); break;
             case "Map editor": startActivity(new Intent(this, MapEditorActivity.class)); break;
             case "Settings": showSettings(); break;
             case "Exit": finish(); break;
@@ -249,6 +323,7 @@ public final class MainActivity extends Activity implements ClientSession.Listen
         Button connect = actionButton("Connect", "Connect / disconnect");
         connectButton = connect;
         Button local = actionButton("Local server", "Start/stop local server");
+        localServerButton = local;
         Button editControls = actionButton("Edit controls", "Customize touch controls");
         Button menu = actionButton("Menu", "Back to main menu");
 
@@ -701,7 +776,12 @@ public final class MainActivity extends Activity implements ClientSession.Listen
     }
     private void logAsset(String name) { logger.info("Assets: " + name + " received, atlas reloaded"); }
     @Override public void map(MapPacket m) {
-        runOnUiThread(() -> { if (game != null) game.setNetMap(m); });
+        runOnUiThread(() -> {
+            if (game == null) return;
+            game.setNetMap(m);
+            if (m != null && m.hasZoom()) game.setZoomLevel((float) m.zoom());
+            else game.resetZoom();
+        });
     }
     @Override public void script(Script s) {
         runOnUiThread(() -> {
@@ -843,6 +923,16 @@ public final class MainActivity extends Activity implements ClientSession.Listen
             zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoom * factor));
             invalidate();
         }
+        /** Applies an absolute zoom supplied by the server (not a pinch multiplier). */
+        void setZoomLevel(float level) {
+            zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, level));
+            invalidate();
+        }
+        /** Restores the default zoom for a map/region without an explicit server zoom. */
+        void resetZoom() {
+            zoom = 1f;
+            invalidate();
+        }
         void setCameraFollow(boolean enabled) {
             cameraFollow = enabled;
             invalidate();
@@ -913,12 +1003,42 @@ public final class MainActivity extends Activity implements ClientSession.Listen
             }
             p.setStyle(Paint.Style.FILL);
             int tileCount = atlas.tileCount();
-            if (hasNetMap) {
-                // Real floor streamed by the server — tiles line up exactly with snapshot entities.
-                for (int y = 0; y < netH; y++) for (int x = 0; x < netW; x++) {
-                    float sx = ox + (x - y) * tile * .5f, sy = oy + (x + y) * tile * .25f;
-                    int id = netTiles[y * netW + x];
-                    drawTile(c, sx, sy, tile, (id >= 0 && id < tileCount) ? id : -1);
+            if (hasNetMap && netTiles != null && netW > 0 && netH > 0) {
+                // Invert the isometric projection at expanded viewport corners. This bounds the
+                // visible tile rectangle instead of scanning every tile on the UI thread per frame.
+                float left = -tile, right = getWidth() + tile;
+                float top = -tile * .5f, bottom = getHeight() + tile * .5f;
+                float minWorldX = Float.POSITIVE_INFINITY, maxWorldX = Float.NEGATIVE_INFINITY;
+                float minWorldY = Float.POSITIVE_INFINITY, maxWorldY = Float.NEGATIVE_INFINITY;
+                float[] cornerX = { left, right, left, right };
+                float[] cornerY = { top, top, bottom, bottom };
+                for (int i = 0; i < 4; i++) {
+                    float u = (cornerX[i] - ox) / (tile * .5f);
+                    float v = (cornerY[i] - oy) / (tile * .25f);
+                    float wx = (u + v) * .5f;
+                    float wy = (v - u) * .5f;
+                    minWorldX = Math.min(minWorldX, wx);
+                    maxWorldX = Math.max(maxWorldX, wx);
+                    minWorldY = Math.min(minWorldY, wy);
+                    maxWorldY = Math.max(maxWorldY, wy);
+                }
+                int x0 = Math.max(0, (int)Math.floor(minWorldX) - 1);
+                int x1 = Math.min(netW - 1, (int)Math.ceil(maxWorldX) + 1);
+                int y0 = Math.max(0, (int)Math.floor(minWorldY) - 1);
+                int y1 = Math.min(netH - 1, (int)Math.ceil(maxWorldY) + 1);
+                int safeLength = (int)Math.min((long)netTiles.length, (long)netW * netH);
+                for (int y = y0; y <= y1; y++) {
+                    int row = y * netW;
+                    for (int x = x0; x <= x1; x++) {
+                        int index = row + x;
+                        if (index < 0 || index >= safeLength) continue;
+                        float sx = ox + (x - y) * tile * .5f;
+                        float sy = oy + (x + y) * tile * .25f;
+                        if (sx + tile * .5f < 0 || sx - tile * .5f > getWidth()
+                                || sy + tile * .25f < 0 || sy - tile * .25f > getHeight()) continue;
+                        int id = netTiles[index];
+                        drawTile(c, sx, sy, tile, (id >= 0 && id < tileCount) ? id : -1);
+                    }
                 }
             }
             // Без карты (нет соединения / сервер без карты) пол пустой: пустой игровой экран.

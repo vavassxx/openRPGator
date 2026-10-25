@@ -17,6 +17,7 @@ the host are the opposite: they run in a restricted `ui.*` sandbox — see [Clie
 | `engine.tick` | number | Current world tick (updated per step) |
 | `engine.log(msg)` | — | Prints `[Lua] msg` to stdout |
 | `engine.on_tick(fn)` | — | Register a global tick handler (arg = tick number) |
+| `engine.set_zoom(zoom)` | — | Sets the region's initial camera zoom for joining players (`0` restores the client default); sent with `MapPacket`, including on region transitions |
 | `engine.notify(msg)` | — | Broadcast a toast notification to all connected players (`UiSink.broadcastNotify`) |
 | `engine.dialog(player, text, {choice,...}, fn(idx))` | — | Open a modal choice dialog for one player; `fn` fires with the 1-based choice on answer |
 | `engine.layout(player, widgets, strings)` | — | Push a host-driven widget schema to one player (`UiSink.layoutTo`); clients render `panel`/`bar`/`text`/`button` blindly |
@@ -28,6 +29,16 @@ Dialogs/layouts/scripts require the embedding server to install a `UiSink`; with
 are no-ops. `player` is an entity facade (e.g. `world.get('id')`) or a raw entity id. `engine.layout`
 is the mechanism behind the scripted HUD — see [architecture.md](architecture.md) for the widget
 schema and [examples/host/README.md](../examples/host/README.md) for a worked HP-bar example.
+
+Region startup scripts can choose the initial camera scale for every player entering the region:
+
+```lua
+-- world.lua next to the region map
+engine.set_zoom(0.8)  -- show more of the map; 1.0 is the client's default, 0 resets it
+```
+
+The value travels with `MapPacket`, so it is applied again when a portal moves the player to a
+different region.
 
 ## Client UI sandbox
 

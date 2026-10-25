@@ -21,7 +21,7 @@ import java.util.List;
  *   10 UiLayout(kind, dialogId, json) — layout + strings UI document
  *   11 Script(name, source) — client-side Lua UI script pushed by the host
  *   12 Cmd(code, arg) — custom command (client ↔ server; value chosen by the host)
- *   14 MapPacket(width, height, tiles) — authoritative ground layer pushed after Welcome
+ *   14 MapPacket(width, height, tiles[, zoom]) — authoritative ground layer (optional camera zoom)
  *   15 Font(name, bytes) — server-pushed TTF/OTF for custom UI
  */
 public final class Protocol {
@@ -82,6 +82,8 @@ public final class Protocol {
             data.writeInt(p.height());
             data.writeInt(p.tiles().length);
             for (int t : p.tiles()) data.writeInt(t);
+            // Optional trailing field: old clients ignore it, new clients read it when present.
+            if (p.hasZoom()) data.writeDouble(p.zoom());
         } else if (packet instanceof Font p) {
             writeString(data, p.name());
             data.writeInt(p.data().length);
@@ -159,11 +161,14 @@ public final class Protocol {
 
     private static MapPacket readMap(DataInputStream in) throws IOException {
         int w = in.readInt(), h = in.readInt(), n = in.readInt();
-        if (w < 0 || h < 0 || n < 0 || w * h != n || n > MAX_FRAME_SIZE / 4)
+        long expected = (long) w * h;
+        if (w < 0 || h < 0 || n < 0 || expected != n || n > MAX_FRAME_SIZE / 4)
             throw new IOException("Invalid map packet: " + w + "x" + h + " tiles=" + n);
         int[] tiles = new int[n];
         for (int i = 0; i < n; i++) tiles[i] = in.readInt();
-        return new MapPacket(w, h, tiles);
+        // Zoom is an optional trailing field so maps from older servers still parse.
+        double zoom = in.available() >= Double.BYTES ? in.readDouble() : 0;
+        return new MapPacket(w, h, tiles, zoom);
     }
 
     private static Dialog readDialog(DataInputStream in) throws IOException {

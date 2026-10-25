@@ -97,6 +97,10 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
     private int connectPort = DEFAULT_PORT;
     private String playerName = DEFAULT_NAME;
     private Double zoomArg = null;
+    /** True once an explicit CLI or server zoom is in force; disables auto-fit. */
+    private boolean zoomLocked;
+    /** Map whose server-provided zoom still has to be applied on the render thread. */
+    private volatile MapPacket pendingZoom;
 
     private SettingsField nameField;
     private SettingsField tickRateField;
@@ -134,6 +138,7 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
     private DesktopClientMain(String[] args) throws Exception {
         // ── Parse arguments ──────────────────────────────────────
         parseArgs(args);
+        zoomLocked = zoomArg != null;
         loadConfig();
 
         // The server host folder (~/.openrpgator/data/host) is created up-front, so starting the
@@ -557,6 +562,21 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
             else { screen = Screen.MENU; session.disconnect(); connected = false; statusText = "Offline"; return; }
         }
 
+        // A server-provided zoom arrives with MapPacket on the network thread. Apply it here,
+        // once, so it locks out auto-fit without fighting the player's later +/- input.
+        MapPacket pending = pendingZoom;
+        if (pending != null) {
+            pendingZoom = null;
+            if (pending.hasZoom()) {
+                renderer.setZoom(pending.zoom());
+                zoomLocked = true;
+            } else if (zoomArg == null) {
+                // A region without an explicit zoom falls back to the normal auto-fit.
+                renderer.setZoom(1.0);
+                zoomLocked = false;
+            }
+        }
+
         // ── Zoom: +/- keys ───────────────────────────────────────
         if (renderer.keyDown(LwjglRenderer.KEY_EQUAL) || renderer.keyDown(LwjglRenderer.KEY_KP_ADD))
             renderer.setZoom(renderer.zoom() * 1.02);
@@ -599,7 +619,7 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
         } else if (netMap != null) renderer.setCamera(netMap.width() / 2.0, netMap.height() / 2.0);
 
         // ── Auto-fit map into view once ──────────────────────────
-        if (zoomArg == null && netMap != null && renderer.zoom() <= 1.0) {
+        if (!zoomLocked && netMap != null && renderer.zoom() <= 1.0) {
             double diag = Math.max(netMap.width(), netMap.height());
             double fit = Math.min(w / (diag * 32.0 + 32), h / (diag * 16.0 + 32));
             renderer.setZoom(Math.max(0.25, Math.min(fit, 4.0)));
@@ -861,7 +881,10 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
     }
 
     @Override public void onSnapshot(Snapshot s) { latestSnapshot.set(s); }
-    @Override public void onMap(MapPacket m) { netMap = m; }
+    @Override public void onMap(MapPacket m) {
+        netMap = m;
+        pendingZoom = m;
+    }
     @Override public void onFont(Font f) {
         try { renderer.setUiFont(f.name(), f.data()); }
         catch (RuntimeException e) { System.err.println("Font load failed: " + f.name() + ": " + e.getMessage()); }

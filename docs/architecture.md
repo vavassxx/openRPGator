@@ -28,8 +28,9 @@ Only the frontend modules depend on LWJGL/AWT/Android. The core and server modul
 - ECS-like entity/component world with a **deterministic tick loop**.
 - 2.5D coordinates: an entity at world `(x, y)` is drawn at `ox + (x − y)·hw`, `oy + (x + y)·hh`
   (iso projection), with `elevation` lifted along `−y`.
-- Movement is box/circle/polygon collision + slide-on-axis (`CollisionWorld`); the `.rmap`
-  `collision` layer is not yet wired into it (walls are passable — see [status.md](status.md)).
+- Movement is box/circle/polygon collision + slide-on-axis (`CollisionWorld`). An `.rmap`
+  `collision` layer becomes a finite `TileGrid` (one cell = one world unit); maps without one keep
+  the previous unbounded, entity-only collision behaviour.
 
 ## Network protocol
 
@@ -46,7 +47,9 @@ TCP, length-framed, JSON-free (except the `UiLayout` payload, which is JSON by d
    are read for compatibility and converted to `UiLayout`.
 6. Right after `Welcome` the host streams the authoritative ground layer as `MapPacket(14)`: the
    client **never reads a local `.rmap`** — without a connection (or a server without a map) the
-   game screen stays empty.
+   game screen stays empty. `MapPacket` may carry an optional trailing camera-zoom factor set by
+   the region's `world.lua` via `engine.set_zoom(...)`; old clients ignore the extra field, and
+   the same packet is re-sent on region transitions.
 7. The host can push a small client-side Lua UI script as `Script(11)` — the "mini-sandbox" (see
    below).
 
@@ -124,9 +127,11 @@ Packing sources into a `.pak`: [docs/assets.md](assets.md).
   the inverse iso projection (`D`/`Right` move right on screen, not along a world axis).
 - Android: `GameView` draws snapshots + the `UiLayout` schema; the floor is streamed by the server
   as `MapPacket` — **without a connection the game screen is empty** (no local `.rmap` is read, no
-  procedural fallback). Plain taps that miss the touch controls are forwarded to the HUD widget
-  layer, so scripted buttons work on screen. `ControlOverlay` handles touch: hold-to-move, pinch
-  zoom, editable control widgets (semantic actions, persisted).
+  procedural fallback). Tile rendering bounds iteration to the visible isometric viewport rather
+  than scanning the entire map every frame. The main menu's Servers screen exposes the last-used
+  address and a local-host-and-join flow. Plain taps that miss the touch controls are forwarded to
+  the HUD widget layer, so scripted buttons work on screen. `ControlOverlay` handles touch:
+  hold-to-move, pinch zoom, editable control widgets (semantic actions, persisted).
 - Camera follows the local player by default on both clients; the **Camera follow** action (`C` on
   desktop, a ⌖ touch button on Android, present in the default and migrated control layouts) toggles
   it off — the world then keeps the last camera position.

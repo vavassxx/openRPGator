@@ -25,7 +25,8 @@ class MapLoadingTest {
         int[] ground = new int[4 * 4];
         int[] collision = new int[4 * 4];
         collision[1 * 4 + 2] = 7; // tile (2,1) blocked
-        return new RMap("coll", 1, 4, 4,
+        // Render pixel size deliberately differs from world units to catch unit mix-ups.
+        return new RMap("coll", 32, 4, 4,
                 List.of(new TileLayer("ground", 4, 4, ground, false),
                         new TileLayer("collision", 4, 4, collision, true)),
                 List.of(), List.of());
@@ -41,6 +42,8 @@ class MapLoadingTest {
 
         var grid = runtime.world().collision().tileGrid();
         assertNotNull(grid, "tile grid must be installed from collision layer");
+        assertEquals(1.0, grid.tileSize(), 1e-9,
+                "collision grid must use world units, not RMap's pixel tile size");
         assertFalse(grid.blockedAt(0, 0));
         assertTrue(grid.blockedAt(2, 1));
 

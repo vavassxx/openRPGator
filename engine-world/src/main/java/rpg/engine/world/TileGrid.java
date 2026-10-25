@@ -20,6 +20,10 @@ import java.util.List;
  * <p>Geometry is deliberately conservative: circles hit any blocked tile they touch,
  * boxes hit any blocked tile their AABB overlaps, and polygon colliders are approximated with
  * their axis-aligned bounding box. Walls are entity-level segments and are not part of the grid.
+ *
+ * <p>{@code tileSize} is measured in the same world units as {@link WorldPosition}: engine
+ * positions are expressed in whole map tiles, so a normal map uses {@code 1.0}. It is not the
+ * pixel size stored in {@code RMap.tileSize()}, which is a renderer concern.
  */
 public final class TileGrid {
     private final int width;
@@ -27,6 +31,7 @@ public final class TileGrid {
     private final double tileSize;
     private final boolean[] blocked;
 
+    /** @param tileSize one tile's edge length in world units (usually {@code 1.0}) */
     public TileGrid(int width, int height, double tileSize, boolean[] blocked) {
         if (width <= 0 || height <= 0 || tileSize <= 0)
             throw new IllegalArgumentException("invalid tile grid dimensions");

@@ -276,7 +276,10 @@ public final class ServerHost {
     }
 
     private RegionRuntime initialRegion() {
-        return regions.find("default").orElseGet(() -> regions.all().stream().findFirst().orElse(null));
+        Optional<RegionRuntime> namedDefault = regions.find("default");
+        if (namedDefault.isPresent()) return namedDefault.get();
+        // Explicit fallback policy: lexicographically first region id.
+        return regions.all().stream().min(Comparator.comparing(RegionRuntime::id)).orElse(null);
     }
 
     private GameRuntime currentRuntime(long entityId) {
@@ -418,7 +421,8 @@ public final class ServerHost {
         RegionRuntime region = regions.find(c.regionId).orElse(null);
         if (region == null || region.map() == null || region.map().layers().isEmpty()) return;
         var ground = region.map().layers().get(0);
-        c.send(new MapPacket(ground.width(), ground.height(), ground.tiles()));
+        double zoom = region.runtime().scripts().api().viewZoom();
+        c.send(new MapPacket(ground.width(), ground.height(), ground.tiles(), zoom));
     }
 
     private void sendFonts(OutputStream out, Path dir) {

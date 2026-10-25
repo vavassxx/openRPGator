@@ -8,7 +8,10 @@ import java.util.*;
 public final class RegionCatalog {
     public record Entry(String id, Path path, RMap map) {}
     private final Map<String, Entry> regions;
-    private RegionCatalog(Map<String, Entry> regions) { this.regions = Map.copyOf(regions); }
+    private RegionCatalog(Map<String, Entry> regions) {
+        // Preserve filename-sorted load order; Map.copyOf does not promise iteration order.
+        this.regions = Collections.unmodifiableMap(new LinkedHashMap<>(regions));
+    }
 
     public static RegionCatalog load(Path directory) throws IOException {
         if (directory == null) throw new IllegalArgumentException("directory is null");

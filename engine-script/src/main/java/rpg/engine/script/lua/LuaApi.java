@@ -45,6 +45,8 @@ public final class LuaApi {
     private volatile RegionTransitionSink regionTransitionSink;
     private volatile String regionId = "default";
     private volatile WorldPosition spawnPoint = new WorldPosition(0, 0, 0);
+    /** Region-level initial camera zoom; 0 means "let the client decide". */
+    private volatile double viewZoom;
     private String version = "0.4.0";
 
     private final Map<EntityId, List<LuaFunction>> tickHandlers = new LinkedHashMap<>();
@@ -92,6 +94,16 @@ public final class LuaApi {
     }
     public WorldPosition spawnPoint() { return spawnPoint; }
 
+    /** Initial camera zoom for players entering this region, or {@code 0} when unset. */
+    public double viewZoom() { return viewZoom; }
+
+    /** Sets the region-level initial zoom from an embedding host; {@code 0} clears it. */
+    public void setViewZoom(double zoom) {
+        if (!Double.isFinite(zoom) || zoom < 0)
+            throw new IllegalArgumentException("invalid camera zoom: " + zoom);
+        this.viewZoom = zoom;
+    }
+
     public void install(Globals globals) {
         LuaTable engine = new LuaTable();
         engine.set("version", new ZeroArgFunction() { public LuaValue call() { return valueOf(version); }});
@@ -115,6 +127,15 @@ public final class LuaApi {
             public LuaValue callImpl(Varargs args) {
                 if (args.narg() < 2) return NONE;
                 spawnPoint = new WorldPosition(args.arg(1).todouble(), args.arg(2).todouble(), args.narg() >= 3 ? args.arg(3).todouble() : 0);
+                return NONE;
+            }
+        });
+        engine.set("set_zoom", new OneArgFunction() {
+            public LuaValue call(LuaValue value) {
+                double zoom = value.checkdouble();
+                if (!Double.isFinite(zoom) || zoom < 0)
+                    throw new LuaError("engine.set_zoom: expected a finite number >= 0");
+                viewZoom = zoom;
                 return NONE;
             }
         });
