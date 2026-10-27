@@ -481,6 +481,12 @@ public final class ServerHost {
             @Override public void clearDialogs(long id) { }
             @Override public void layoutTo(long id,String json,List<String> strings) { Client c=clients.get(id); if(c!=null)c.send(UiLayout.layout(json,strings)); }
             @Override public void scriptTo(long id,String name,String source) { Client c=clients.get(id); if(c!=null)c.send(new Script(name,source)); }
+            @Override public void dataTo(long id,String channel,String payload) {
+                Client c = clients.get(id);
+                if (c != null && channel != null && !channel.isBlank()
+                        && channel.length() <= 128 && payload != null && payload.length() <= 60000)
+                    c.send(new DataPacket(channel, payload));
+            }
         };
     }
 

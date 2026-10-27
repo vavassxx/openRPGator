@@ -218,6 +218,20 @@ public final class LuaApi {
                 return NONE;
             }
         });
+
+        engine.set("send_data", new ArgsLib() {
+            public LuaValue callImpl(Varargs args) {
+                if (args.narg() < 3 || uiSink == null) return FALSE;
+                long targetId = targetIdOf(args.arg(1));
+                if (targetId == -1) return FALSE;
+                String channel = args.arg(2).checkjstring();
+                String payload = args.arg(3).optjstring("");
+                if (channel.isBlank() || channel.length() > 128 || payload.length() > 60000)
+                    throw new LuaError("engine.send_data: invalid channel or oversized payload");
+                uiSink.dataTo(targetId, channel, payload);
+                return TRUE;
+            }
+        });
         engine.set("on_command", new OneArgFunction() {
             public LuaValue call(LuaValue fn) {
                 if (fn.isfunction()) commandHandlers.add((LuaFunction) fn);

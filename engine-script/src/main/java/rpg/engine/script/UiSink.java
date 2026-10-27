@@ -34,6 +34,9 @@ public interface UiSink {
      */
     default void scriptTo(long playerEntityId, String name, String source) { }
 
+    /** Sends bounded host-defined text data to one client. */
+    default void dataTo(long playerEntityId, String channel, String payload) { }
+
     /** Called by the network layer when a player disconnects, to discard pending dialogs. */
     void clearDialogs(long playerEntityId);
 

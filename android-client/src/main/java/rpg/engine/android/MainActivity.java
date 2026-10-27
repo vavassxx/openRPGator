@@ -635,6 +635,20 @@ public final class MainActivity extends Activity implements ClientSession.Listen
         shareLog.setOnClickListener(v -> shareLog());
         root.addView(shareLog, new LinearLayout.LayoutParams(-1, dp(48)));
 
+        CheckBox receiveData = new CheckBox(this);
+        receiveData.setText("Accept host application data");
+        receiveData.setTextColor(Color.WHITE);
+        receiveData.setChecked(prefs.getBoolean("accept_host_data", false));
+        receiveData.setOnCheckedChangeListener((button, checked) ->
+                prefs.edit().putBoolean("accept_host_data", checked).apply());
+        root.addView(receiveData, new LinearLayout.LayoutParams(-1, dp(48)));
+
+        TextView dataHint = new TextView(this);
+        dataHint.setText("Allows game scripts to deliver custom text payloads through named data channels.");
+        dataHint.setTextColor(Color.rgb(150, 155, 166));
+        dataHint.setTextSize(12);
+        root.addView(dataHint, new LinearLayout.LayoutParams(-1, -2));
+
         // Storage info
         TextView storage = new TextView(this);
         storage.setTextColor(Color.rgb(180, 180, 180));
@@ -858,6 +872,16 @@ public final class MainActivity extends Activity implements ClientSession.Listen
             status.setText(s);
         });
     }
+    @Override public void data(DataPacket packet) {
+        if (!prefs.getBoolean("accept_host_data", false)) return;
+        runOnUiThread(() -> {
+            if (isFinishing() || isDestroyed()) return;
+            logger.info("Host data [" + packet.channel() + "]: " + packet.payload());
+            Toast.makeText(this, "[" + packet.channel() + "] " + packet.payload(),
+                    Toast.LENGTH_LONG).show();
+        });
+    }
+
     @Override public void font(Font font) {
         try {
             File f = new File(appStorage.fontsDir(), font.name().replaceAll("[^A-Za-z0-9._-]", "_"));
