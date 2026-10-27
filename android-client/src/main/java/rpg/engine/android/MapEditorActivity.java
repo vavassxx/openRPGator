@@ -225,7 +225,7 @@ public final class MapEditorActivity extends Activity {
             .setNeutralButton("Delete", (d,w) -> {
                 List<MapEntity> es = new ArrayList<>(editor.map.entities());
                 es.remove(idx);
-                editor.map = new RMap(editor.map.name(), editor.map.tileSize(), editor.map.width(), editor.map.height(), editor.map.layers(), es);
+                editor.map = new RMap(editor.map.name(), editor.map.tileSize(), editor.map.width(), editor.map.height(), editor.map.layers(), es, editor.map.portals());
                 editor.invalidate();
                 Toast.makeText(this, "Entity deleted", Toast.LENGTH_SHORT).show();
             })
@@ -236,7 +236,7 @@ public final class MapEditorActivity extends Activity {
                 List<MapEntity> es = new ArrayList<>(editor.map.entities());
                 es.set(idx, new MapEntity(pid.isEmpty() ? e.id() : pid,
                         pprefab.isEmpty() ? "entity" : pprefab, e.position(), pscript.isEmpty() ? null : pscript));
-                editor.map = new RMap(editor.map.name(), editor.map.tileSize(), editor.map.width(), editor.map.height(), editor.map.layers(), es);
+                editor.map = new RMap(editor.map.name(), editor.map.tileSize(), editor.map.width(), editor.map.height(), editor.map.layers(), es, editor.map.portals());
                 editor.selectedPrefab = pprefab;
                 editor.invalidate();
                 Toast.makeText(this, "Entity updated", Toast.LENGTH_SHORT).show();
@@ -348,11 +348,11 @@ public final class MapEditorActivity extends Activity {
             if(x<0||y<0||x>=map.width()||y>=map.height()) return;
             if(mode==Mode.PAINT) {
                 TileLayer l=map.layers().get(0); int[] t=l.tiles().clone(); t[y*map.width()+x]=erase?0:selectedTile;
-                ArrayList<TileLayer> ls=new ArrayList<>(map.layers()); ls.set(0,new TileLayer(l.name(),l.width(),l.height(),t,l.collision())); map=new RMap(map.name(),map.tileSize(),map.width(),map.height(),ls,map.entities());
+                ArrayList<TileLayer> ls=new ArrayList<>(map.layers()); ls.set(0,new TileLayer(l.name(),l.width(),l.height(),t,l.collision())); map=new RMap(map.name(),map.tileSize(),map.width(),map.height(),ls,map.entities(),map.portals());
             } else if(mode==Mode.COLLISION) {
                 TileLayer l=map.layers().get(0); int[] t=l.tiles().clone();
                 if(erase) t[y*map.width()+x]=0; else if(t[y*map.width()+x]==0) t[y*map.width()+x]=selectedTile;
-                ArrayList<TileLayer> ls=new ArrayList<>(map.layers()); ls.set(0,new TileLayer(l.name(),l.width(),l.height(),t,!l.collision())); map=new RMap(map.name(),map.tileSize(),map.width(),map.height(),ls,map.entities());
+                ArrayList<TileLayer> ls=new ArrayList<>(map.layers()); ls.set(0,new TileLayer(l.name(),l.width(),l.height(),t,!l.collision())); map=new RMap(map.name(),map.tileSize(),map.width(),map.height(),ls,map.entities(),map.portals());
             } else {
                 addEntity(x,y);
             }
@@ -364,7 +364,7 @@ public final class MapEditorActivity extends Activity {
             ArrayList<MapEntity> es=new ArrayList<>(map.entities());
             if(idx>=0) { editorDialog(x,y); return; }
             String id="entity_"+(es.size()+1); String prefab=selectedPrefab.isEmpty()?"entity":selectedPrefab;
-            es.add(new MapEntity(id,prefab,new WorldPosition(x,y,0),null)); map=new RMap(map.name(),map.tileSize(),map.width(),map.height(),map.layers(),es);
+            es.add(new MapEntity(id,prefab,new WorldPosition(x,y,0),null)); map=new RMap(map.name(),map.tileSize(),map.width(),map.height(),map.layers(),es,map.portals());
         }
     }
 }

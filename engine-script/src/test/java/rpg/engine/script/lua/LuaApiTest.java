@@ -42,6 +42,16 @@ class LuaApiTest {
         assertEquals(42, globals.get("engine").get("tick").call().toint());
     }
 
+    @Test
+    void setZoomStoresRegionDefault() {
+        assertEquals(0.0, api.viewZoom(), 1e-9);
+        scripts.execute("engine.set_zoom(1.75)", "zoom_test");
+        assertEquals(1.75, api.viewZoom(), 1e-9);
+        scripts.execute("engine.set_zoom(0)", "zoom_reset");
+        assertEquals(0.0, api.viewZoom(), 1e-9);
+        assertThrows(LuaError.class, () -> scripts.execute("engine.set_zoom(-1)", "zoom_invalid"));
+    }
+
     // ── world operations ──────────────────────────────────────────
     @Test
     void spawnAndCount() {

@@ -42,8 +42,12 @@ public final class LuaApi {
     private volatile long tick;
     private volatile UiSink uiSink;
     private volatile PlayerStore playerStore;
+    private volatile RegionTransitionSink regionTransitionSink;
+    private volatile String regionId = "default";
     private volatile WorldPosition spawnPoint = new WorldPosition(0, 0, 0);
-    private String version = "0.4.0";
+    /** Region-level initial camera zoom; 0 means "let the client decide". */
+    private volatile double viewZoom;
+    private String version = "0.5.0";
 
     private final Map<EntityId, List<LuaFunction>> tickHandlers = new LinkedHashMap<>();
     private final Map<EntityId, List<LuaFunction>> enterHandlers = new LinkedHashMap<>();
@@ -82,7 +86,23 @@ public final class LuaApi {
     public void setVersion(String version) { this.version = version; }
     public void setUiSink(UiSink sink) { this.uiSink = sink; }
     public void setPlayerStore(PlayerStore store) { this.playerStore = store; }
+    public void setRegionTransitionSink(RegionTransitionSink sink) { this.regionTransitionSink = sink; }
+    /** Sets the region identity used when Lua requests a cross-region transition. */
+    public void setRegionId(String regionId) {
+        if (regionId == null || regionId.isBlank()) throw new IllegalArgumentException("regionId is blank");
+        this.regionId = regionId.trim().toLowerCase(Locale.ROOT);
+    }
     public WorldPosition spawnPoint() { return spawnPoint; }
+
+    /** Initial camera zoom for players entering this region, or {@code 0} when unset. */
+    public double viewZoom() { return viewZoom; }
+
+    /** Sets the region-level initial zoom from an embedding host; {@code 0} clears it. */
+    public void setViewZoom(double zoom) {
+        if (!Double.isFinite(zoom) || zoom < 0)
+            throw new IllegalArgumentException("invalid camera zoom: " + zoom);
+        this.viewZoom = zoom;
+    }
 
     public void install(Globals globals) {
         LuaTable engine = new LuaTable();
@@ -90,10 +110,32 @@ public final class LuaApi {
         engine.set("tick", new ZeroArgFunction() { public LuaValue call() { return valueOf(tick); }});
         engine.set("log", new OneArgFunction() { public LuaValue call(LuaValue value) { System.out.println("[Lua] " + value.tojstring()); return NONE; }});
         engine.set("on_tick", new OneArgFunction() { public LuaValue call(LuaValue fn) { register(globalTickHandlers, null, fn); return NONE; }});
+        engine.set("transition", new ArgsLib() {
+            public LuaValue callImpl(Varargs args) {
+                if (regionTransitionSink == null || args.narg() < 4) return FALSE;
+                long playerId = targetIdOf(args.arg(1));
+                if (playerId == -1) return FALSE;
+                String targetRegion = args.arg(2).tojstring();
+                double x = args.arg(3).todouble();
+                double y = args.arg(4).todouble();
+                double z = args.narg() >= 5 ? args.arg(5).todouble() : 0;
+                return regionTransitionSink.transition(regionId, playerId, targetRegion, x, y, z)
+                        ? TRUE : FALSE;
+            }
+        });
         engine.set("set_spawn_point", new ArgsLib() {
             public LuaValue callImpl(Varargs args) {
                 if (args.narg() < 2) return NONE;
                 spawnPoint = new WorldPosition(args.arg(1).todouble(), args.arg(2).todouble(), args.narg() >= 3 ? args.arg(3).todouble() : 0);
+                return NONE;
+            }
+        });
+        engine.set("set_zoom", new OneArgFunction() {
+            public LuaValue call(LuaValue value) {
+                double zoom = value.checkdouble();
+                if (!Double.isFinite(zoom) || zoom < 0)
+                    throw new LuaError("engine.set_zoom: expected a finite number >= 0");
+                viewZoom = zoom;
                 return NONE;
             }
         });
@@ -174,6 +216,20 @@ public final class LuaApi {
                 if (uiSink == null || targetId == -1) return NONE;
                 uiSink.scriptTo(targetId, name, source);
                 return NONE;
+            }
+        });
+
+        engine.set("send_data", new ArgsLib() {
+            public LuaValue callImpl(Varargs args) {
+                if (args.narg() < 3 || uiSink == null) return FALSE;
+                long targetId = targetIdOf(args.arg(1));
+                if (targetId == -1) return FALSE;
+                String channel = args.arg(2).checkjstring();
+                String payload = args.arg(3).optjstring("");
+                if (channel.isBlank() || channel.length() > 128 || payload.length() > 60000)
+                    throw new LuaError("engine.send_data: invalid channel or oversized payload");
+                uiSink.dataTo(targetId, channel, payload);
+                return TRUE;
             }
         });
         engine.set("on_command", new OneArgFunction() {
@@ -385,9 +441,13 @@ public final class LuaApi {
         return findId(raw);
     }
 
+    /** Persistence key for a player: the name lowercased so saves are case-insensitive. */
     private String playerKey(long id) {
         if (world == null) return null;
-        return world.entities().get(new EntityId(id), Name.class).map(Name::value).orElse(null);
+        return world.entities().get(new EntityId(id), Name.class)
+                .map(Name::value)
+                .map(n -> n.toLowerCase(Locale.ROOT))
+                .orElse(null);
     }
 
     /** Extracts the entity id from a facade table (calls {@code facade.id()}) or a raw number. */

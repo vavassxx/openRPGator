@@ -37,6 +37,7 @@ public final class MainActivity extends Activity implements ClientSession.Listen
     private static final int PICK_STORAGE = 9001;
     /** Connect/Disconnect toggle button on the game screen; label follows {@link #connected}. */
     private Button connectButton;
+    private Button localServerButton;
     private volatile boolean connected;
     /** Client-only camera mode: when enabled the camera stays centered on our entity. */
     private boolean cameraFollow = true;
@@ -60,7 +61,7 @@ public final class MainActivity extends Activity implements ClientSession.Listen
         session = new ClientSession(this, appStorage.pakCacheDir());
         logger = AppLogger.get(this);
         logger.info("Application started");
-        localServer = new LocalServerBackend(s -> runOnUiThread(() -> status.setText(s)));
+        localServer = new LocalServerBackend(s -> runOnUiThread(() -> { if (status != null) status.setText(s); }));
         showMainMenu();
     }
 
@@ -91,36 +92,251 @@ public final class MainActivity extends Activity implements ClientSession.Listen
     private void showMainMenu() {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setGravity(Gravity.CENTER);
-        root.setBackgroundColor(Color.rgb(18, 19, 22));
-        int pad = dp(24);
-        root.setPadding(pad, pad, pad, pad);
+        root.setBackgroundColor(Color.rgb(15, 17, 22));
+        root.setPadding(dp(22), dp(22), dp(22), dp(22));
 
+        LinearLayout heading = new LinearLayout(this);
+        heading.setOrientation(LinearLayout.VERTICAL);
+        heading.setPadding(0, dp(8), 0, dp(22));
         TextView title = new TextView(this);
         title.setText("openRPGator");
-        title.setTextColor(Color.WHITE);
+        title.setTextColor(Color.rgb(242, 244, 250));
+        title.setTextSize(30);
+        title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        TextView subtitle = new TextView(this);
+        subtitle.setText("A world-building RPG engine");
+        subtitle.setTextColor(Color.rgb(145, 153, 170));
+        subtitle.setTextSize(14);
+        subtitle.setPadding(0, dp(5), 0, 0);
+        heading.addView(title);
+        heading.addView(subtitle);
+        root.addView(heading);
+
+        TextView section = new TextView(this);
+        section.setText("GET STARTED");
+        section.setTextColor(Color.rgb(115, 169, 255));
+        section.setTextSize(11);
+        section.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        section.setLetterSpacing(0.12f);
+        section.setPadding(0, dp(6), 0, dp(8));
+        root.addView(section);
+
+        addMenuCard(root, "Servers", "Join a server or host a local world", true);
+        addMenuCard(root, "Map editor", "Create and edit .rmap maps", false);
+        addMenuCard(root, "Settings", "Configure client preferences", false);
+        View spacer = new View(this);
+        root.addView(spacer, new LinearLayout.LayoutParams(1, 0, 1));
+        TextView footer = new TextView(this);
+        footer.setText("Android client  •  Local hosting supported");
+        footer.setTextColor(Color.rgb(104, 111, 126));
+        footer.setTextSize(12);
+        footer.setGravity(Gravity.CENTER);
+        footer.setPadding(0, dp(14), 0, dp(8));
+        root.addView(footer, new LinearLayout.LayoutParams(-1, -2));
+
+        Button exit = actionButton("Exit", "Close openRPGator");
+        root.addView(exit, new LinearLayout.LayoutParams(-1, dp(46)));
+        exit.setOnClickListener(v -> onMenu("Exit"));
+        setContentView(root);
+    }
+
+    private void addMenuCard(LinearLayout root, String label, String description, boolean primary) {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setGravity(Gravity.CENTER_VERTICAL);
+        card.setPadding(dp(16), dp(10), dp(16), dp(10));
+        card.setBackgroundColor(primary ? Color.rgb(35, 54, 83) : Color.rgb(27, 30, 38));
+        card.setElevation(dp(2));
+        TextView title = new TextView(this);
+        title.setText(label);
+        title.setTextColor(Color.rgb(242, 244, 250));
+        title.setTextSize(17);
+        title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        TextView detail = new TextView(this);
+        detail.setText(description);
+        detail.setTextColor(Color.rgb(164, 173, 190));
+        detail.setTextSize(12);
+        detail.setPadding(0, dp(3), 0, 0);
+        card.addView(title);
+        card.addView(detail);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, dp(76));
+        lp.setMargins(0, 0, 0, dp(10));
+        root.addView(card, lp);
+        card.setOnClickListener(v -> onMenu(label));
+        card.setContentDescription(label + ". " + description);
+        card.setFocusable(true);
+        card.setClickable(true);
+    }
+
+
+    private void showServerMenu() {
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setBackgroundColor(Color.rgb(15, 17, 22));
+        root.setPadding(dp(22), dp(22), dp(22), dp(22));
+
+        TextView title = new TextView(this);
+        title.setText("Servers");
+        title.setTextColor(Color.rgb(242, 244, 250));
         title.setTextSize(28);
-        title.setGravity(Gravity.CENTER);
-        title.setPadding(0, 0, 0, dp(32));
+        title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         root.addView(title);
 
-        String[] labels = {"Play", "Map editor", "Settings", "Exit"};
-        for (String label : labels) {
-            Button b = new Button(this);
-            b.setText(label);
-            b.setTextSize(16);
-            b.setOnClickListener(v -> onMenu(label));
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, dp(56));
-            lp.setMargins(0, dp(6), 0, dp(6));
-            root.addView(b, lp);
+        TextView subtitle = new TextView(this);
+        subtitle.setText("Connect to a saved address or start the world in data/host.");
+        subtitle.setTextColor(Color.rgb(145, 153, 170));
+        subtitle.setTextSize(13);
+        subtitle.setPadding(0, dp(5), 0, dp(18));
+        root.addView(subtitle);
+
+        root.addView(sectionLabel("SAVED SERVERS"));
+        LinearLayout savedList = new LinearLayout(this);
+        savedList.setOrientation(LinearLayout.VERTICAL);
+        List<String[]> savedServers = loadSavedServers();
+        if (savedServers.isEmpty()) {
+            TextView empty = new TextView(this);
+            empty.setText("No saved servers yet. Connect once to add an address.");
+            empty.setTextColor(Color.rgb(120, 129, 146));
+            empty.setTextSize(12);
+            empty.setPadding(0, dp(4), 0, dp(10));
+            savedList.addView(empty);
+        } else {
+            for (String[] server : savedServers) {
+                String savedHost = server[0];
+                String savedPort = server[1];
+                LinearLayout row = new LinearLayout(this);
+                row.setOrientation(LinearLayout.HORIZONTAL);
+                row.setGravity(Gravity.CENTER_VERTICAL);
+                row.setPadding(dp(8), dp(2), dp(4), dp(2));
+                row.setBackgroundColor(Color.rgb(27, 30, 38));
+                TextView address = new TextView(this);
+                address.setText(savedHost + ":" + savedPort);
+                address.setTextColor(Color.rgb(225, 230, 240));
+                address.setTextSize(13);
+                row.addView(address, new LinearLayout.LayoutParams(0, dp(44), 1));
+                Button use = actionButton("Connect", "Connect to " + savedHost + ":" + savedPort);
+                use.setOnClickListener(v -> connectToServer(savedHost, savedPort,
+                        prefs.getString("last_name", "player")));
+                row.addView(use, new LinearLayout.LayoutParams(-2, dp(44)));
+                Button remove = actionButton("×", "Remove saved server");
+                remove.setOnClickListener(v -> {
+                    List<String[]> current = loadSavedServers();
+                    current.removeIf(entry -> entry[0].equals(savedHost) && entry[1].equals(savedPort));
+                    saveSavedServers(current);
+                    showServerMenu();
+                });
+                row.addView(remove, new LinearLayout.LayoutParams(-2, dp(44)));
+                LinearLayout.LayoutParams rowLp = new LinearLayout.LayoutParams(-1, -2);
+                rowLp.bottomMargin = dp(5);
+                savedList.addView(row, rowLp);
+            }
         }
-        setContentView(root);
+        root.addView(savedList, new LinearLayout.LayoutParams(-1, -2));
+
+        root.addView(sectionLabel("SERVER ADDRESS"));
+        EditText host = field("Address", prefs.getString("last_host", "127.0.0.1"));
+        EditText port = field("Port", prefs.getString("last_port", "27991"));
+        EditText name = field("Character name", prefs.getString("last_name", "player"));
+        root.addView(host, new LinearLayout.LayoutParams(-1, dp(52)));
+        root.addView(port, new LinearLayout.LayoutParams(-1, dp(52)));
+        root.addView(name, new LinearLayout.LayoutParams(-1, dp(52)));
+
+        Button connect = actionButton("Connect", "Connect to this server");
+        connect.setTextSize(14);
+        root.addView(connect, new LinearLayout.LayoutParams(-1, dp(50)));
+        connect.setOnClickListener(v -> connectToServer(
+                host.getText().toString().trim(), port.getText().toString().trim(),
+                name.getText().toString().trim()));
+
+        Button local = actionButton("Host local world", "Start the local server and join it");
+        local.setTextSize(14);
+        LinearLayout.LayoutParams localLp = new LinearLayout.LayoutParams(-1, dp(50));
+        localLp.topMargin = dp(8);
+        root.addView(local, localLp);
+        local.setOnClickListener(v -> {
+            String p = prefs.getString("last_port", "27991");
+            String n = prefs.getString("last_name", "player");
+            prefs.edit().putString("last_host", "127.0.0.1").putString("last_port", p)
+                .putString("last_name", n).apply();
+            rememberSavedServer("127.0.0.1", p);
+            showGame();
+            if (localServerButton != null) localServerButton.performClick();
+            if (connectButton != null) connectButton.performClick();
+        });
+
+        View spacer = new View(this);
+        root.addView(spacer, new LinearLayout.LayoutParams(1, 0, 1));
+        Button back = actionButton("Back to menu", "Return to the main menu");
+        root.addView(back, new LinearLayout.LayoutParams(-1, dp(48)));
+        back.setOnClickListener(v -> showMainMenu());
+        ScrollView scroll = new ScrollView(this);
+        scroll.setFillViewport(true);
+        scroll.addView(root);
+        setContentView(scroll);
+    }
+
+    private void connectToServer(String host, String port, String name) {
+        try {
+            int portNumber = Integer.parseInt(port);
+            if (host.isEmpty() || name.isEmpty() || portNumber < 1 || portNumber > 65535)
+                throw new IllegalArgumentException("Enter a host, name, and valid port (1–65535)");
+            prefs.edit().putString("last_host", host).putString("last_port", port)
+                    .putString("last_name", name).apply();
+            rememberSavedServer(host, port);
+            showGame();
+            if (connectButton != null) connectButton.performClick();
+        } catch (Exception e) {
+            new AlertDialog.Builder(this).setTitle("Cannot connect")
+                    .setMessage(e.getMessage() == null ? "Invalid server address or port" : e.getMessage())
+                    .setPositiveButton("OK", null).show();
+        }
+    }
+
+    private List<String[]> loadSavedServers() {
+        List<String[]> result = new ArrayList<>();
+        try {
+            org.json.JSONArray array = new org.json.JSONArray(prefs.getString("saved_servers", "[]"));
+            for (int i = 0; i < array.length(); i++) {
+                org.json.JSONObject item = array.optJSONObject(i);
+                if (item == null) continue;
+                String host = item.optString("host", "").trim();
+                String port = item.optString("port", "").trim();
+                if (!host.isEmpty() && !port.isEmpty()) result.add(new String[]{host, port});
+            }
+        } catch (Exception ignored) { }
+        return result;
+    }
+
+    private void rememberSavedServer(String host, String port) {
+        List<String[]> next = new ArrayList<>();
+        next.add(new String[]{host, port});
+        for (String[] entry : loadSavedServers()) {
+            if (entry[0].equalsIgnoreCase(host) && entry[1].equals(port)) continue;
+            if (next.size() >= 8) break;
+            next.add(entry);
+        }
+        saveSavedServers(next);
+    }
+
+    private void saveSavedServers(List<String[]> servers) {
+        org.json.JSONArray array = new org.json.JSONArray();
+        try {
+            for (String[] server : servers) {
+                org.json.JSONObject item = new org.json.JSONObject();
+                item.put("host", server[0]);
+                item.put("port", server[1]);
+                array.put(item);
+            }
+            prefs.edit().putString("saved_servers", array.toString()).apply();
+        } catch (org.json.JSONException e) {
+            logger.error("Could not save server list", e);
+        }
     }
 
     private void onMenu(String label) {
         logger.info("Main menu: " + label);
         switch (label) {
-            case "Play": showGame(); break;
+            case "Servers": showServerMenu(); break;
             case "Map editor": startActivity(new Intent(this, MapEditorActivity.class)); break;
             case "Settings": showSettings(); break;
             case "Exit": finish(); break;
@@ -198,6 +414,7 @@ public final class MainActivity extends Activity implements ClientSession.Listen
         Button connect = actionButton("Connect", "Connect / disconnect");
         connectButton = connect;
         Button local = actionButton("Local server", "Start/stop local server");
+        localServerButton = local;
         Button editControls = actionButton("Edit controls", "Customize touch controls");
         Button menu = actionButton("Menu", "Back to main menu");
 
@@ -329,11 +546,16 @@ public final class MainActivity extends Activity implements ClientSession.Listen
         type.setOnClickListener(v -> { overlay.cycleType(); if (overlay.selected() != null) status.setText("Type: " + overlay.selected().type.name()); });
         smaller.setOnClickListener(v -> { if (overlay.selected() != null) { overlay.selected().size = Math.max(.05f, overlay.selected().size - .02f); overlay.invalidate(); } });
         larger.setOnClickListener(v -> { if (overlay.selected() != null) { overlay.selected().size = Math.min(.35f, overlay.selected().size + .02f); overlay.invalidate(); } });
-        add.setOnClickListener(v -> {
-            ControlBinding b = controls.addCustom(ControlAction.PRIMARY, ControlType.BUTTON, .5f, .5f, .12f, "A");
-            overlay.select(b);
-            status.setText("New button: drag to position");
-        });
+        add.setOnClickListener(v -> new AlertDialog.Builder(this)
+            .setTitle("Add touch control")
+            .setItems(new String[]{"Action button", "Movement joystick"}, (dialog, which) -> {
+                ControlBinding b = which == 1
+                    ? controls.addCustom(ControlAction.MOVE_UP, ControlType.JOYSTICK, .14f, .78f, .23f, "◎")
+                    : controls.addCustom(ControlAction.PRIMARY, ControlType.BUTTON, .5f, .5f, .12f, "A");
+                overlay.select(b);
+                overlay.invalidate();
+                status.setText(which == 1 ? "New joystick: drag to position" : "New button: drag to position");
+            }).show());
         remove.setOnClickListener(v -> { if (overlay.selected() != null) { controls.remove(overlay.selected()); overlay.invalidate(); status.setText("Button removed"); } });
 
         panel.addView(body, new LinearLayout.LayoutParams(-1, -2));
@@ -412,6 +634,20 @@ public final class MainActivity extends Activity implements ClientSession.Listen
         shareLog.setText("Share log");
         shareLog.setOnClickListener(v -> shareLog());
         root.addView(shareLog, new LinearLayout.LayoutParams(-1, dp(48)));
+
+        CheckBox receiveData = new CheckBox(this);
+        receiveData.setText("Accept host application data");
+        receiveData.setTextColor(Color.WHITE);
+        receiveData.setChecked(prefs.getBoolean("accept_host_data", false));
+        receiveData.setOnCheckedChangeListener((button, checked) ->
+                prefs.edit().putBoolean("accept_host_data", checked).apply());
+        root.addView(receiveData, new LinearLayout.LayoutParams(-1, dp(48)));
+
+        TextView dataHint = new TextView(this);
+        dataHint.setText("Allows game scripts to deliver custom text payloads through named data channels.");
+        dataHint.setTextColor(Color.rgb(150, 155, 166));
+        dataHint.setTextSize(12);
+        root.addView(dataHint, new LinearLayout.LayoutParams(-1, -2));
 
         // Storage info
         TextView storage = new TextView(this);
@@ -498,7 +734,7 @@ public final class MainActivity extends Activity implements ClientSession.Listen
         TextView about = new TextView(this);
         about.setTextColor(Color.rgb(140, 140, 140));
         about.setTextSize(12);
-        about.setText("openRPGator 0.3.2.3\nGPL-3.0\nServer-authoritative 2.5D RPG engine");
+        about.setText("openRPGator 0.5.0\nGPL-3.0\nServer-authoritative 2.5D RPG engine");
         root.addView(about);
 
         // Back button at bottom
@@ -636,6 +872,16 @@ public final class MainActivity extends Activity implements ClientSession.Listen
             status.setText(s);
         });
     }
+    @Override public void data(DataPacket packet) {
+        if (!prefs.getBoolean("accept_host_data", false)) return;
+        runOnUiThread(() -> {
+            if (isFinishing() || isDestroyed()) return;
+            logger.info("Host data [" + packet.channel() + "]: " + packet.payload());
+            Toast.makeText(this, "[" + packet.channel() + "] " + packet.payload(),
+                    Toast.LENGTH_LONG).show();
+        });
+    }
+
     @Override public void font(Font font) {
         try {
             File f = new File(appStorage.fontsDir(), font.name().replaceAll("[^A-Za-z0-9._-]", "_"));
@@ -650,7 +896,12 @@ public final class MainActivity extends Activity implements ClientSession.Listen
     }
     private void logAsset(String name) { logger.info("Assets: " + name + " received, atlas reloaded"); }
     @Override public void map(MapPacket m) {
-        runOnUiThread(() -> { if (game != null) game.setNetMap(m); });
+        runOnUiThread(() -> {
+            if (game == null) return;
+            game.setNetMap(m);
+            if (m != null && m.hasZoom()) game.setZoomLevel((float) m.zoom());
+            else game.resetZoom();
+        });
     }
     @Override public void script(Script s) {
         runOnUiThread(() -> {
@@ -760,6 +1011,8 @@ public final class MainActivity extends Activity implements ClientSession.Listen
         private static final long TOAST_DURATION_MS = 4000;
         private final List<ToastRecord> toasts = new ArrayList<>();
         private record ToastRecord(String text, long at) {}
+        private final Map<Long, SmoothPosition> smoothPositions = new HashMap<>();
+        private record SmoothPosition(double x, double y, double elevation, long updatedAt) {}
         /** Ground layer streamed by the server (MapPacket); null → empty floor (no connection). */
         private volatile int[] netTiles;
         private volatile int netW, netH;
@@ -790,6 +1043,16 @@ public final class MainActivity extends Activity implements ClientSession.Listen
             zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoom * factor));
             invalidate();
         }
+        /** Applies an absolute zoom supplied by the server (not a pinch multiplier). */
+        void setZoomLevel(float level) {
+            zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, level));
+            invalidate();
+        }
+        /** Restores the default zoom for a map/region without an explicit server zoom. */
+        void resetZoom() {
+            zoom = 1f;
+            invalidate();
+        }
         void setCameraFollow(boolean enabled) {
             cameraFollow = enabled;
             invalidate();
@@ -814,6 +1077,30 @@ public final class MainActivity extends Activity implements ClientSession.Listen
         }
         void setSnapshot(Snapshot s) { snapshot = s; invalidate(); }
         @Override protected void onDraw(Canvas c) {
+            Snapshot raw = snapshot;
+            long now = System.nanoTime();
+            List<Snapshot.EntityState> displayed = new ArrayList<>(raw.entities().size());
+            Set<Long> seen = new HashSet<>();
+            for (Snapshot.EntityState e : raw.entities()) {
+                seen.add(e.id());
+                SmoothPosition old = smoothPositions.get(e.id());
+                double x = e.x(), y = e.y(), elevation = e.elevation();
+                if (old != null) {
+                    double distance = Math.hypot(x - old.x(), y - old.y());
+                    // Large discontinuities are map/region teleports or respawns: snap instead
+                    // of drawing a character travelling across the whole world.
+                    if (distance <= 4.0) {
+                        double dt = Math.max(0.0, Math.min(0.25, (now - old.updatedAt()) / 1_000_000_000.0));
+                        double alpha = 1.0 - Math.exp(-dt / 0.075);
+                        x = old.x() + (x - old.x()) * alpha;
+                        y = old.y() + (y - old.y()) * alpha;
+                        elevation = old.elevation() + (elevation - old.elevation()) * alpha;
+                    }
+                }
+                smoothPositions.put(e.id(), new SmoothPosition(x, y, elevation, now));
+                displayed.add(new Snapshot.EntityState(e.id(), x, y, elevation, e.sprite(), e.scale()));
+            }
+            smoothPositions.keySet().retainAll(seen);
             c.drawColor(Color.rgb(36, 48, 42));
             // The paint is shared with the widget/toast overlay, which leaves semi-transparent
             // colors behind (toast fade-out ends near alpha 0). Tiles and sprites are drawn with
@@ -824,7 +1111,7 @@ public final class MainActivity extends Activity implements ClientSession.Listen
             float ox = getWidth() / 2f, oy = getHeight() / 3f;
             if (cameraFollow) {
                 Snapshot.EntityState target = null;
-                for (Snapshot.EntityState e : snapshot.entities()) {
+                for (Snapshot.EntityState e : displayed) {
                     if (e.id() == localPlayerId) { target = e; break; }
                 }
                 if (target != null) {
@@ -835,16 +1122,46 @@ public final class MainActivity extends Activity implements ClientSession.Listen
             }
             p.setStyle(Paint.Style.FILL);
             int tileCount = atlas.tileCount();
-            if (hasNetMap) {
-                // Real floor streamed by the server — tiles line up exactly with snapshot entities.
-                for (int y = 0; y < netH; y++) for (int x = 0; x < netW; x++) {
-                    float sx = ox + (x - y) * tile * .5f, sy = oy + (x + y) * tile * .25f;
-                    int id = netTiles[y * netW + x];
-                    drawTile(c, sx, sy, tile, (id >= 0 && id < tileCount) ? id : -1);
+            if (hasNetMap && netTiles != null && netW > 0 && netH > 0) {
+                // Invert the isometric projection at expanded viewport corners. This bounds the
+                // visible tile rectangle instead of scanning every tile on the UI thread per frame.
+                float left = -tile, right = getWidth() + tile;
+                float top = -tile * .5f, bottom = getHeight() + tile * .5f;
+                float minWorldX = Float.POSITIVE_INFINITY, maxWorldX = Float.NEGATIVE_INFINITY;
+                float minWorldY = Float.POSITIVE_INFINITY, maxWorldY = Float.NEGATIVE_INFINITY;
+                float[] cornerX = { left, right, left, right };
+                float[] cornerY = { top, top, bottom, bottom };
+                for (int i = 0; i < 4; i++) {
+                    float u = (cornerX[i] - ox) / (tile * .5f);
+                    float v = (cornerY[i] - oy) / (tile * .25f);
+                    float wx = (u + v) * .5f;
+                    float wy = (v - u) * .5f;
+                    minWorldX = Math.min(minWorldX, wx);
+                    maxWorldX = Math.max(maxWorldX, wx);
+                    minWorldY = Math.min(minWorldY, wy);
+                    maxWorldY = Math.max(maxWorldY, wy);
+                }
+                int x0 = Math.max(0, (int)Math.floor(minWorldX) - 1);
+                int x1 = Math.min(netW - 1, (int)Math.ceil(maxWorldX) + 1);
+                int y0 = Math.max(0, (int)Math.floor(minWorldY) - 1);
+                int y1 = Math.min(netH - 1, (int)Math.ceil(maxWorldY) + 1);
+                int safeLength = (int)Math.min((long)netTiles.length, (long)netW * netH);
+                for (int y = y0; y <= y1; y++) {
+                    int row = y * netW;
+                    for (int x = x0; x <= x1; x++) {
+                        int index = row + x;
+                        if (index < 0 || index >= safeLength) continue;
+                        float sx = ox + (x - y) * tile * .5f;
+                        float sy = oy + (x + y) * tile * .25f;
+                        if (sx + tile * .5f < 0 || sx - tile * .5f > getWidth()
+                                || sy + tile * .25f < 0 || sy - tile * .25f > getHeight()) continue;
+                        int id = netTiles[index];
+                        drawTile(c, sx, sy, tile, (id >= 0 && id < tileCount) ? id : -1);
+                    }
                 }
             }
             // Без карты (нет соединения / сервер без карты) пол пустой: пустой игровой экран.
-            for (Snapshot.EntityState e : snapshot.entities()) {
+            for (Snapshot.EntityState e : displayed) {
                 float sx = ox + (float)(e.x() - e.y()) * tile * .5f;
                 float sy = oy + (float)(e.x() + e.y()) * tile * .25f - (float)e.elevation() * 12 * zoom;
                 Bitmap bmp = atlas.spriteImage(e.sprite());

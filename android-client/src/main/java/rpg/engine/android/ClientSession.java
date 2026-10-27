@@ -22,6 +22,7 @@ final class ClientSession {
         void script(Script s);
         void pakLoaded(String name); // a pak finished buffering to the cache
         void font(Font font); // a custom UI font finished downloading
+        void data(DataPacket packet);
         void status(String s);
     }
     private final Listener listener;
@@ -71,6 +72,7 @@ final class ClientSession {
                     else if (q instanceof Font f) listener.font(f);
                     else if (q instanceof MapPacket m) listener.map(m);
                     else if (q instanceof Script sc) listener.script(sc);
+                    else if (q instanceof DataPacket dp) listener.data(dp);
                     // legacy push-UI packets, kept for compatibility with older servers
                     else if (q instanceof Notify n) listener.ui(UiLayout.notify(n.text()));
                     else if (q instanceof Dialog d) listener.ui(UiLayout.dialog(d.dialogId(), d.text(), d.choices()));

@@ -8,6 +8,8 @@ import rpg.engine.network.*;
 import rpg.engine.pak.PakStreamer;
 import rpg.engine.world.InteractRequestedEvent;
 import rpg.engine.script.UiSink;
+import rpg.engine.map.RegionCatalog;
+import rpg.engine.map.MapPortal;
 
 import java.io.*;
 import java.net.*;
@@ -16,31 +18,46 @@ import java.util.*;
 import java.util.concurrent.*;
 
 /**
- * Headless authoritative server host. Owns one {@link GameRuntime}, accepts TCP clients,
- * broadcasts {@link Snapshot}s, routes {@link Input} into the world and pushes UI events
- * ({@link UiLayout}) to the players that Lua scripts target.
- *
- * <p>Instance-based so it can be embedded either from the CLI ({@link ServerMain}), a Swing
- * admin UI or the Android/desktop clients' local server, with lifecycle controlled through
- * {@link #start}/{@link #stop}. Uses only Java 17 APIs so the same class runs on Android.
+ * Headless authoritative server host. Owns connected player sessions and one or more
+ * independently simulated regions. Persistent player state remains host/script-owned;
+ * region migration moves only the region-local ECS representation.
  */
 public final class ServerHost {
+    /** Default maximum players' movement speed in world tiles per second. */
+    public static final double DEFAULT_PLAYER_SPEED = 6.0;
+    /** Default snapshot interest radius in world tiles (entities beyond it are not streamed). */
+    public static final double DEFAULT_VIEW_RADIUS = 24.0;
+    static final int MAX_INPUT_ACTIONS_PER_SECOND = 24;
+    /** Incoming packets accepted per second per client, with a token-bucket burst allowance. */
+    static final int MAX_INBOUND_PACKETS_PER_SECOND = 60;
+    /** Bound concurrent socket readers; excess connections are rejected rather than spawning threads forever. */
+    static final int MAX_CLIENT_CONNECTIONS = 64;
+    /** Global bound on pending client packets. */
+    static final int INBOUND_QUEUE_CAPACITY = 4096;
+    /** Maximum number of queued packets processed during one world tick. */
+    static final int MAX_INBOUND_PACKETS_PER_TICK = 512;
+    static final int MAX_CONSECUTIVE_INBOUND_DROPS = 64;
+    static final int MAX_CONSECUTIVE_QUEUE_OVERFLOWS = 8;
+    static final int MAX_NAME_LENGTH = 24;
 
-    /**
-     * What a server run needs. Map/pak paths are already resolved (see {@link ServerConfig}).
-     *
-     * @param tickHz world tick rate in Hz (≡ 1000/tickHz ms per tick); 0 or negative falls back to
-     *               the {@link ServerConfig#DEFAULT_TICK_HZ default}, always clamped to 1..240
-     */
-    public record Config(Path map, List<Path> paks, int port, int tickHz, Path dataDir) {
+    public record Config(Path map, List<Path> paks, int port, int tickHz, Path dataDir,
+                         double playerSpeed, double viewRadius) {
         public Config {
             if (paks == null) paks = List.of();
             if (tickHz <= 0) tickHz = ServerConfig.DEFAULT_TICK_HZ;
             tickHz = Math.max(1, Math.min(240, tickHz));
+            if (!(playerSpeed > 0) || !Double.isFinite(playerSpeed))
+                throw new IllegalArgumentException("invalid player speed: " + playerSpeed);
+            if (!(viewRadius > 0) || !Double.isFinite(viewRadius))
+                throw new IllegalArgumentException("invalid view radius: " + viewRadius);
+        }
+
+        /** Backward-compatible constructor using the default movement speed and view radius. */
+        public Config(Path map, List<Path> paks, int port, int tickHz, Path dataDir) {
+            this(map, paks, port, tickHz, dataDir, DEFAULT_PLAYER_SPEED, DEFAULT_VIEW_RADIUS);
         }
     }
 
-    /** Receives human-readable operational messages (map load, listener address, pak list). */
     public interface Listener {
         void log(String line);
         default void error(String line) { log("[error] " + line); }
@@ -48,47 +65,32 @@ public final class ServerHost {
 
     private final Listener listener;
     private final Map<Long, Client> clients = new ConcurrentHashMap<>();
-    /**
-     * One thread per connected client. A cached pool (not Java-21 virtual threads, which are
-     * unavailable on Android) keeps this class runnable inside the Android client, where the same
-     * server code is embedded via {@code LocalServerBackend}.
-     */
+    /** Canonical (case-insensitive) character name → entity id; guards against duplicate logins. */
+    private final Map<String, Long> activeNames = new ConcurrentHashMap<>();
+    private final RegionManager regions = new RegionManager();
+    private final BlockingQueue<InboundPacket> inboundPackets = new ArrayBlockingQueue<>(INBOUND_QUEUE_CAPACITY);
+    private volatile int inboundPacketBudget = 240;
+    private volatile double playerSpeed = DEFAULT_PLAYER_SPEED;
+    private volatile double viewRadius = DEFAULT_VIEW_RADIUS;
     private ExecutorService exec;
-    private volatile GameRuntime runtime;
     private volatile boolean running;
     private ServerSocket server;
     private ScheduledExecutorService tick;
-    private static final String PLAYER_SPRITE = rpg.engine.runtime.Sprites.PLAYER;
     private volatile List<Path> pakFiles = List.of();
     private volatile Path fontDir;
-    /**
-     * Serializes all access to {@link GameRuntime} (world mutate + snapshot broadcast). The ECS
-     * is not thread-safe: world mutations come from the tick thread ({@code runtime.tick()},
-     * Lua on_tick) and from per-client network threads ({@link #applyInput}, spawn/destroy,
-     * dialog responses), while {@link #broadcastSnapshot} reads the whole world every tick.
-     */
     private final Object worldLock = new Object();
+    private FilePlayerStore playerStore;
 
-    public ServerHost(Listener listener) {
-        this.listener = listener == null ? line -> {} : listener;
-    }
+    public ServerHost(Listener listener) { this.listener = listener == null ? line -> {} : listener; }
 
-    /**
-     * Moves the pre-host-layout player store into the host-owned data directory.
-     * Existing files are preserved if the destination already contains a save.
-     */
     private static void migrateLegacyPlayerStore(Path legacyDir, Path playerDir) {
-        if (!Files.isDirectory(legacyDir)) {
-            return;
-        }
+        if (!Files.isDirectory(legacyDir)) return;
         try {
             Files.createDirectories(playerDir);
             try (DirectoryStream<Path> files = Files.newDirectoryStream(legacyDir)) {
                 for (Path file : files) {
                     Path target = playerDir.resolve(file.getFileName().toString());
-                    if (Files.isRegularFile(file) && !Files.exists(target)) {
-                        Files.move(file, target);
-                    }
+                    if (Files.isRegularFile(file) && !Files.exists(target)) Files.move(file, target);
                 }
             }
             try { Files.delete(legacyDir); } catch (DirectoryNotEmptyException ignored) { }
@@ -98,36 +100,73 @@ public final class ServerHost {
     }
 
     public boolean isRunning() { return running; }
-    public GameRuntime runtime() { return runtime; }
+
+    /** Compatibility accessor for single-region embedders; returns the default region if present. */
+    public GameRuntime runtime() {
+        Optional<RegionRuntime> r = regions.find("default");
+        if (r.isPresent()) return r.get().runtime();
+        return regions.all().stream().findFirst().map(RegionRuntime::runtime).orElse(null);
+    }
+
+    public RegionManager regions() { return regions; }
     public int port() { return server == null ? -1 : server.getLocalPort(); }
 
     public synchronized void start(Config cfg) throws IOException {
         if (running) return;
-        runtime = new GameRuntime();
-        runtime.setUiSink(uiSink());
+        playerSpeed = cfg.playerSpeed();
+        viewRadius = cfg.viewRadius();
+        inboundPackets.clear();
+        inboundPacketBudget = Math.max(64, Math.min(MAX_INBOUND_PACKETS_PER_TICK, cfg.tickHz() * 12));
+        regions.clear();
+        Path hostDir = cfg.dataDir() == null ? null : cfg.dataDir().resolve("host");
+        if (hostDir != null) Files.createDirectories(hostDir);
+
         if (cfg.dataDir() != null) {
-            Path hostDir = cfg.dataDir().resolve("host");
             Path playerDir = hostDir.resolve("players");
             migrateLegacyPlayerStore(cfg.dataDir().resolve("players"), playerDir);
-            runtime.setPlayerStore(new FilePlayerStore(playerDir));
+            playerStore = new FilePlayerStore(playerDir);
         }
-        pakFiles = List.copyOf(cfg.paks());
-        fontDir = cfg.map() != null && cfg.map().getParent() != null
-                ? cfg.map().getParent().resolve("fonts") : null;
 
-        if (cfg.map() != null && Files.isRegularFile(cfg.map())) {
-            try {
-                runtime.loadMap(cfg.map());
-                listener.log("Loaded map: " + cfg.map().getFileName());
-            } catch (Exception e) {
-                listener.error("Failed to load map " + cfg.map() + ": " + e.getMessage());
+        pakFiles = List.copyOf(cfg.paks());
+        fontDir = hostDir == null ? null : hostDir.resolve("fonts");
+        if (!Files.isDirectory(fontDir) && cfg.map() != null && cfg.map().getParent() != null)
+            fontDir = cfg.map().getParent().resolve("fonts");
+
+        Path regionDir = hostDir == null ? null : hostDir.resolve("regions");
+        boolean loadedRegions = false;
+        if (regionDir != null && Files.isDirectory(regionDir)) {
+            try (var paths = Files.list(regionDir)) {
+                loadedRegions = paths.anyMatch(p -> p.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".rmap"));
             }
+        }
+
+        if (loadedRegions) {
+            try {
+                regions.load(RegionCatalog.load(regionDir));
+                listener.log("Loaded " + regions.ids().size() + " region(s) from " + regionDir);
+            } catch (Exception e) {
+                listener.error("Failed to load regions: " + e.getMessage());
+                throw new IOException("region catalog load failed", e);
+            }
+        } else if (cfg.map() != null && Files.isRegularFile(cfg.map())) {
+            RegionRuntime fallback = new RegionRuntime("default", 1L << 48);
+            fallback.loadMap(cfg.map());
+            regions.add(fallback);
+            listener.log("Loaded legacy single map: " + cfg.map().getFileName());
         } else if (cfg.map() != null) {
             listener.error("Map file not found: " + cfg.map());
         }
+
+        for (RegionRuntime region : regions.all()) {
+            region.runtime().setUiSink(uiSink());
+            region.runtime().setPlayerStore(playerStore);
+            region.scripts().api().setRegionTransitionSink((source, id, target, x, y, z) ->
+                    transitionPlayer(id, source, target, new WorldPosition(x, y, z)));
+        }
+
         if (!pakFiles.isEmpty()) {
-            listener.log("Will stream " + pakFiles.size() + " pak(s): "
-                    + pakFiles.stream().map(p -> p.getFileName().toString()).toList());
+            listener.log("Will stream " + pakFiles.size() + " pak(s): " +
+                    pakFiles.stream().map(p -> p.getFileName().toString()).toList());
         }
 
         long tickMs = Math.max(1, Math.round(1000.0 / cfg.tickHz()));
@@ -135,20 +174,22 @@ public final class ServerHost {
         tick.scheduleAtFixedRate(() -> {
             try {
                 synchronized (worldLock) {
-                    // Host-owned knowledge (who is connected) is handed to the script layer each
-                    // tick; Lua decides what to do with it (HP, HUD, quests — all script-side).
-                    runtime.setPlayers(clients.keySet());
-                    runtime.tick();
-                    // Entities move on their own (rat patrol, sky timer, Lua on_tick), not only
-                    // in response to player input — broadcast the world every tick so clients
-                    // see autonomous motion without the player having to move.
-                    broadcastSnapshot();
+                    drainInboundPackets(inboundPacketBudget);
+                    for (RegionRuntime region : regions.all())
+                        region.runtime().setPlayers(playersIn(region.id()));
+                    regions.tick(null);
+                    broadcastSnapshots();
                 }
             } catch (Throwable t) { t.printStackTrace(); }
         }, 0, tickMs, TimeUnit.MILLISECONDS);
-        listener.log("World tick @ " + cfg.tickHz() + " Hz (" + tickMs + " ms)");
+        listener.log("World tick @ " + cfg.tickHz() + " Hz across " + regions.ids().size() + " region(s) (" + tickMs + " ms)");
 
-        exec = Executors.newCachedThreadPool();
+        exec = new ThreadPoolExecutor(0, MAX_CLIENT_CONNECTIONS, 30L, TimeUnit.SECONDS,
+                new SynchronousQueue<>(), runnable -> {
+                    Thread thread = new Thread(runnable, "openrpg-client");
+                    thread.setDaemon(true);
+                    return thread;
+                }, new ThreadPoolExecutor.AbortPolicy());
         server = new ServerSocket(cfg.port());
         server.setReuseAddress(true);
         running = true;
@@ -162,12 +203,18 @@ public final class ServerHost {
         if (!running) return;
         running = false;
         try { if (server != null) server.close(); } catch (IOException ignored) {}
-        exec.shutdownNow();
+        if (exec != null) exec.shutdownNow();
         if (tick != null) tick.shutdown();
+        inboundPackets.clear();
         synchronized (worldLock) {
-            for (Long id : new ArrayList<>(clients.keySet())) runtime.scripts().api().dispatchDisconnect(id);
+            for (Client c : new ArrayList<>(clients.values())) {
+                RegionRuntime region = regions.find(c.regionId).orElse(null);
+                if (region != null) region.runtime().scripts().api().dispatchDisconnect(c.entityId);
+            }
+            for (Client c : new ArrayList<>(clients.values())) destroyPlayer(c);
+            clients.clear();
         }
-        clients.clear();
+        regions.clear();
         listener.log("Server stopped");
     }
 
@@ -175,7 +222,12 @@ public final class ServerHost {
         while (running) {
             try {
                 Socket s = server.accept();
-                exec.submit(() -> client(s));
+                try {
+                    exec.execute(() -> client(s));
+                } catch (RejectedExecutionException full) {
+                    try { s.close(); } catch (IOException ignored) { }
+                    listener.error("Connection rejected: server is at client capacity");
+                }
             } catch (IOException e) {
                 if (running) listener.error("accept error: " + e.getMessage());
             }
@@ -185,35 +237,39 @@ public final class ServerHost {
     private void client(Socket s) {
         Client client = null;
         try (s) {
+            // Do not let silent sockets occupy all bounded client-reader threads forever.
+            s.setSoTimeout(5000);
             InputStream in = s.getInputStream();
             OutputStream out = s.getOutputStream();
             Packet hello = Protocol.read(in);
             if (!(hello instanceof Hello h)) return;
-
-            Long entityId = spawnPlayer(h.name());
-            client = new Client(entityId, s, out);
+            s.setSoTimeout(0);
+            synchronized (worldLock) { client = spawnPlayer(h.name(), out); }
             if (!pakFiles.isEmpty()) PakStreamer.send(out, pakFiles);
-            Protocol.write(out, new Welcome(entityId));
+            Protocol.write(out, new Welcome(client.entityId));
             sendFonts(out, fontDir);
-            // Register only after Welcome: the tick thread broadcasts snapshots to every client,
-            // so a client must not be reachable before its handshake has completed.
-            clients.put(entityId, client);
-            // Stream the authoritative ground layer right after the handshake: the client never
-            // reads a local .rmap — without this packet its floor stays empty.
-            MapPacket mapPacket = mapPacket();
-            if (mapPacket != null) client.send(mapPacket);
-
+            clients.put(client.entityId, client);
+            sendMap(client);
+            int rateLimitDrops = 0;
+            int queueOverflowDrops = 0;
             while (running && !s.isClosed()) {
                 Packet q = Protocol.read(in);
-                if (q instanceof Input x) {
-                    applyInput(entityId, x);
-                } else if (q instanceof DialogResponse r) {
-                    // Deliver under the world lock: Lua dialogs must not race the tick thread.
-                    synchronized (worldLock) { runtime.respondDialog(r.dialogId(), r.choice()); }
-                } else if (q instanceof Cmd c) {
-                    // Custom command from a widget button / client script; value is host-owned.
-                    synchronized (worldLock) { runtime.dispatchCommand(entityId, c.code(), c.arg()); }
+                if (!client.inboundPackets.tryAcquire()) {
+                    if (++rateLimitDrops >= MAX_CONSECUTIVE_INBOUND_DROPS) {
+                        listener.error("Disconnecting " + client.name + ": inbound packet rate exceeded");
+                        break;
+                    }
+                    continue;
                 }
+                rateLimitDrops = 0;
+                if (!inboundPackets.offer(new InboundPacket(client, q))) {
+                    if (++queueOverflowDrops >= MAX_CONSECUTIVE_QUEUE_OVERFLOWS) {
+                        listener.error("Disconnecting " + client.name + ": inbound packet queue is full");
+                        break;
+                    }
+                    continue;
+                }
+                queueOverflowDrops = 0;
             }
         } catch (Exception ignored) {
         } finally {
@@ -221,123 +277,332 @@ public final class ServerHost {
                 clients.remove(client.entityId);
                 client.dismiss();
                 synchronized (worldLock) {
-                    runtime.scripts().api().dispatchDisconnect(client.entityId);
-                    destroyPlayer(client.entityId);
+                    RegionRuntime region = regions.find(client.regionId).orElse(null);
+                    if (region != null) region.scripts().api().dispatchDisconnect(client.entityId);
+                    destroyPlayer(client);
                 }
             }
         }
     }
 
-    private Long spawnPlayer(String name) {
-        synchronized (worldLock) {
-            Long id = runtime.world().spawn().value();
-            runtime.world().entities().set(new EntityId(id), new Name(name));
-            WorldPosition spawn = runtime.scripts().api().spawnPoint();
-            runtime.world().entities().set(new EntityId(id), new Transform(spawn, 0));
-            runtime.world().entities().set(new EntityId(id), new CircleCollider(0.35));
-            return id;
+    private Client spawnPlayer(String rawName, OutputStream out) {
+        RegionRuntime region = initialRegion();
+        if (region == null) throw new IllegalStateException("server has no loaded regions");
+        String name = normalizePlayerName(rawName);
+        String key = canonicalPlayerKey(name);
+        if (activeNames.putIfAbsent(key, 1L) != null)
+            throw new IllegalArgumentException("character already online: " + name);
+        long id = region.world().spawn().value();
+        try {
+            EntityId e = new EntityId(id);
+            region.world().entities().set(e, new Name(name));
+            WorldPosition spawn = region.scripts().api().spawnPoint();
+            region.world().entities().set(e, new Transform(spawn, 0));
+            region.world().entities().set(e, new CircleCollider(0.35));
+            return new Client(id, name, region.id(), out);
+        } catch (RuntimeException failure) {
+            activeNames.remove(key);
+            throw failure;
         }
     }
 
-    private void destroyPlayer(Long id) {
-        synchronized (worldLock) { runtime.world().entities().destroy(new EntityId(id)); }
+    private void destroyPlayer(Client c) {
+        activeNames.remove(canonicalPlayerKey(c.name));
+        RegionRuntime region = regions.find(c.regionId).orElse(null);
+        if (region != null) region.world().entities().destroy(new EntityId(c.entityId));
     }
 
-    private void applyInput(Long entityId, Input x) {
+    private RegionRuntime initialRegion() {
+        Optional<RegionRuntime> namedDefault = regions.find("default");
+        if (namedDefault.isPresent()) return namedDefault.get();
+        // Explicit fallback policy: lexicographically first region id.
+        return regions.all().stream().min(Comparator.comparing(RegionRuntime::id)).orElse(null);
+    }
+
+    private GameRuntime currentRuntime(long entityId) {
+        Client c = clients.get(entityId);
+        if (c == null) throw new IllegalArgumentException("unknown player: " + entityId);
+        return regions.require(c.regionId).runtime();
+    }
+
+    private Set<Long> playersIn(String regionId) {
+        Set<Long> ids = new HashSet<>();
+        for (Client c : clients.values()) if (regionId.equals(c.regionId) && !c.dismissed) ids.add(c.entityId);
+        return ids;
+    }
+
+    private void applyInput(long entityId, Input x) {
         synchronized (worldLock) {
-        var e = new EntityId(entityId);
-        var t = runtime.world().entities().get(e, Transform.class).orElseThrow();
-        var desired = new WorldPosition(t.position().x() + x.dx() * 0.1,
-                t.position().y() + x.dy() * 0.1, t.position().elevation());
-        var moved = runtime.world().collision().move(e, desired);
-        runtime.world().entities().set(e, new Transform(moved, t.rotation()));
-        if (x.has(Input.INTERACT))
-            runtime.world().interactTarget(moved, 2.0).ifPresent(target ->
-                    runtime.world().events().emit(new InteractRequestedEvent(e, target)));
-        if (x.has(Input.PRIMARY)) runtime.dispatchAction(entityId, "primary");
-        if (x.has(Input.SECONDARY)) runtime.dispatchAction(entityId, "secondary");
-        if (x.has(Input.INVENTORY)) runtime.dispatchAction(entityId, "inventory");
-        broadcastSnapshot();
+            Client c = clients.get(entityId);
+            if (c == null) return;
+            RegionRuntime region = regions.require(c.regionId);
+            var e = new EntityId(entityId);
+            var t = region.world().entities().get(e, Transform.class).orElseThrow();
+            WorldPosition pos = t.position();
+
+            // Authoritative movement: the server integrates at the client's own packet cadence
+            // using monotonic time, clamped so a burst of stale packets cannot push the player
+            // farther than the configured speed allows. Diagonal inputs are normalized.
+            double dx = x.dx(), dy = x.dy();
+            if (!Double.isFinite(dx)) dx = 0;
+            if (!Double.isFinite(dy)) dy = 0;
+            double len = Math.hypot(dx, dy);
+            if (len > 0) {
+                if (len > 1.0) { dx /= len; dy /= len; }
+                long now = System.nanoTime();
+                double dt = Math.max(0.001, Math.min(0.1, (now - c.lastInputNanos) / 1e9));
+                c.lastInputNanos = now;
+                double step = playerSpeed * dt;
+                var desired = new WorldPosition(pos.x() + dx * step,
+                        pos.y() + dy * step, pos.elevation());
+                var moved = region.world().collision().move(e, desired);
+                region.world().entities().set(e, new Transform(moved, t.rotation()));
+                pos = moved;
+            }
+
+            // Semantic actions share one per-client token bucket; interaction is a cheap
+            // proximity query but still guarded so hold-spam cannot flood the world query.
+            if (x.has(Input.INTERACT) && c.actions.tryAcquire())
+                region.world().interactTarget(pos, 2.0).ifPresent(target ->
+                        region.world().events().emit(new InteractRequestedEvent(e, target)));
+            if (x.has(Input.PRIMARY) && c.actions.tryAcquire()) region.runtime().dispatchAction(entityId, "primary");
+            if (x.has(Input.SECONDARY) && c.actions.tryAcquire()) region.runtime().dispatchAction(entityId, "secondary");
+            if (x.has(Input.INVENTORY) && c.actions.tryAcquire()) region.runtime().dispatchAction(entityId, "inventory");
+
+            // Resolve the portal only after the input actions have been queued for this
+            // region. A transition must not make a queued action accidentally execute in
+            // the wrong region on the next tick.
+            Optional<MapPortal> portal = regions.portalAt(region.id(), pos);
+            if (c.portalGuard.shouldActivatePortal(portal.isPresent(), System.nanoTime())) {
+                MapPortal p = portal.orElseThrow();
+                transitionPlayer(entityId, region.id(), p.targetRegion(), p.targetPosition());
+            }
         }
     }
 
-    private void broadcastSnapshot() {
-        List<Snapshot.EntityState> states = runtime.world().entities().entities().stream()
-                .map(id -> {
-                    var reg = runtime.world().entities();
-                    var t = reg.get(id, Transform.class).orElse(null);
-                    if (t == null) return null;
-                    String prefab = reg.get(id, Prefab.class).map(Prefab::value).orElse(null);
-                    // Players carry a Name but no Prefab -> always the dedicated player sprite.
-                    String sprite = (prefab == null || prefab.isBlank()) ? PLAYER_SPRITE : prefab;
-                    double scale = reg.get(id, Scale.class).map(Scale::value).orElse(1.0);
-                    return new Snapshot.EntityState(id.value(), t.position().x(),
-                            t.position().y(), t.position().elevation(), sprite, scale);
-                })
-                .filter(Objects::nonNull)
-                .toList();
-        Snapshot snapshot = new Snapshot(states);
-        for (Client c : clients.values()) c.send(snapshot);
+    private boolean transitionPlayer(long entityId, String expectedSourceRegion, String targetRegion, WorldPosition target) {
+        Client c = clients.get(entityId);
+        if (c == null) return false;
+        long transitionNow = System.nanoTime();
+        if (!c.portalGuard.canTransition(transitionNow)) return false;
+        String from = c.regionId;
+        String expected = expectedSourceRegion == null ? null : expectedSourceRegion.trim().toLowerCase(Locale.ROOT);
+        // A region's Lua runtime may only move players that currently belong to that
+        // runtime. This prevents a stale/cross-region script callback from teleporting
+        // an arbitrary connected player.
+        if (expected == null || !from.equals(expected)) return false;
+        String to = targetRegion == null ? null : targetRegion.trim().toLowerCase(Locale.ROOT);
+        if (to == null || to.isBlank() || from.equals(to)) return false;
+        RegionRuntime destination = regions.find(to).orElse(null);
+        if (destination == null) return false;
+
+        boolean moved = regions.migrate(new EntityId(entityId), from, to, target);
+        if (!moved) return false;
+        c.regionId = to;
+        c.portalGuard.onTransition(transitionNow);
+
+        // Reconstruct only the host-owned session representation needed by the destination world.
+        // Inventory/progression/etc. are deliberately untouched; scripts decide how persistent
+        // state is restored or transformed.
+        EntityId e = new EntityId(entityId);
+        destination.world().entities().set(e, new Name(c.name));
+        destination.world().entities().set(e, new CircleCollider(0.35));
+        destination.runtime().setPlayers(playersIn(to));
+        regions.find(from).ifPresent(r -> r.runtime().setPlayers(playersIn(from)));
+        sendMap(c);
+        listener.log("Player " + c.name + " transitioned " + from + " -> " + to);
+        return true;
+    }
+
+    private void drainInboundPackets(int budget) {
+        for (int i = 0; i < budget; i++) {
+            InboundPacket inbound = inboundPackets.poll();
+            if (inbound == null) return;
+            Client client = inbound.client();
+            // Ignore stale queued packets from a client that has already disconnected.
+            if (client.dismissed || clients.get(client.entityId) != client) continue;
+            try {
+                Packet packet = inbound.packet();
+                if (packet instanceof Input input) {
+                    applyInput(client.entityId, input);
+                } else if (packet instanceof DialogResponse response) {
+                    currentRuntime(client.entityId).respondDialog(response.dialogId(), response.choice());
+                } else if (packet instanceof Cmd command) {
+                    currentRuntime(client.entityId).dispatchCommand(client.entityId, command.code(), command.arg());
+                }
+            } catch (RuntimeException rejected) {
+                listener.error("Rejected packet from " + client.name + ": " +
+                        (rejected.getMessage() == null ? rejected.getClass().getSimpleName() : rejected.getMessage()));
+            }
+        }
+    }
+
+    private record InboundPacket(Client client, Packet packet) {}
+
+    private void broadcastSnapshots() {
+        Map<String, List<Snapshot.EntityState>> byRegion = new HashMap<>();
+        for (RegionRuntime region : regions.all()) {
+            var reg = region.world().entities();
+            List<Snapshot.EntityState> states = reg.entities().stream().map(id -> {
+                var t = reg.get(id, Transform.class).orElse(null);
+                if (t == null) return null;
+                String prefab = reg.get(id, Prefab.class).map(Prefab::value).orElse(null);
+                String sprite = (prefab == null || prefab.isBlank()) ? rpg.engine.runtime.Sprites.PLAYER : prefab;
+                double scale = reg.get(id, Scale.class).map(Scale::value).orElse(1.0);
+                return new Snapshot.EntityState(id.value(), t.position().x(), t.position().y(),
+                        t.position().elevation(), sprite, scale);
+            }).filter(Objects::nonNull).toList();
+            byRegion.put(region.id(), states);
+        }
+        final double rr = viewRadius * viewRadius;
+        for (Client c : clients.values()) {
+            List<Snapshot.EntityState> all = byRegion.getOrDefault(c.regionId, List.of());
+            if (all.isEmpty()) { c.send(new Snapshot(List.of())); continue; }
+            RegionRuntime region = regions.find(c.regionId).orElse(null);
+            var viewer = region == null ? null
+                    : region.world().entities().get(new EntityId(c.entityId), Transform.class).orElse(null);
+            if (viewer == null) { c.send(new Snapshot(List.of())); continue; }
+            final double vx = viewer.position().x(), vy = viewer.position().y();
+            List<Snapshot.EntityState> visible = new ArrayList<>(all.size());
+            for (Snapshot.EntityState s : all) {
+                if (s.id() == c.entityId) { visible.add(s); continue; } // own entity always sent
+                double dx = s.x() - vx, dy = s.y() - vy;
+                if (dx * dx + dy * dy <= rr) visible.add(s);
+            }
+            c.send(new Snapshot(visible));
+        }
     }
 
     private UiSink uiSink() {
         return new UiSink() {
-            @Override public void broadcastNotify(String text) {
-                for (Client c : clients.values()) c.send(UiLayout.notify(text));
-            }
-            @Override public void notifyTo(long playerEntityId, String text) {
-                Client c = clients.get(playerEntityId);
-                if (c != null) c.send(UiLayout.notify(text));
-            }
-            @Override public void dialogTo(long playerEntityId, long dialogId, String text,
-                                           List<String> choices, UiSink.DialogCallback callback) {
-                Client c = clients.get(playerEntityId);
-                if (c != null) c.send(UiLayout.dialog(dialogId, text, choices));
-            }
-            @Override public void clearDialogs(long playerEntityId) { }
-            @Override public void layoutTo(long playerEntityId, String layoutJson, List<String> strings) {
-                Client c = clients.get(playerEntityId);
-                if (c != null) c.send(UiLayout.layout(layoutJson, strings));
-            }
-            @Override public void scriptTo(long playerEntityId, String name, String source) {
-                Client c = clients.get(playerEntityId);
-                if (c != null) c.send(new Script(name, source));
+            @Override public void broadcastNotify(String text) { for (Client c : clients.values()) c.send(UiLayout.notify(text)); }
+            @Override public void notifyTo(long id, String text) { Client c=clients.get(id); if(c!=null)c.send(UiLayout.notify(text)); }
+            @Override public void dialogTo(long id,long dialogId,String text,List<String> choices,UiSink.DialogCallback cb) { Client c=clients.get(id); if(c!=null)c.send(UiLayout.dialog(dialogId,text,choices)); }
+            @Override public void clearDialogs(long id) { }
+            @Override public void layoutTo(long id,String json,List<String> strings) { Client c=clients.get(id); if(c!=null)c.send(UiLayout.layout(json,strings)); }
+            @Override public void scriptTo(long id,String name,String source) { Client c=clients.get(id); if(c!=null)c.send(new Script(name,source)); }
+            @Override public void dataTo(long id,String channel,String payload) {
+                Client c = clients.get(id);
+                if (c != null && channel != null && !channel.isBlank()
+                        && channel.length() <= 128 && payload != null && payload.length() <= 60000)
+                    c.send(new DataPacket(channel, payload));
             }
         };
     }
 
-    /** The authoritative ground layer to stream on connect; null if the host has no map. */
-
-    private void sendFonts(OutputStream out, Path dir) {
-        if (dir == null) return;
-        if (!Files.isDirectory(dir)) return;
-        try (var paths = Files.list(dir)) {
-            for (Path p : paths.filter(Files::isRegularFile).sorted().toList()) {
-                String n = p.getFileName().toString();
-                String lower = n.toLowerCase(Locale.ROOT);
-                if (!(lower.endsWith(".ttf") || lower.endsWith(".otf"))) continue;
-                byte[] data = Files.readAllBytes(p);
-                if (data.length > (1 << 19)) { listener.error("Font too large, skipped: " + n); continue; }
-                Protocol.write(out, new Font(n, data));
-            }
-        } catch (IOException e) { listener.error("Font streaming failed: " + e.getMessage()); }
+    private void sendMap(Client c) {
+        RegionRuntime region = regions.find(c.regionId).orElse(null);
+        if (region == null || region.map() == null || region.map().layers().isEmpty()) return;
+        var ground = region.map().layers().get(0);
+        double zoom = region.runtime().scripts().api().viewZoom();
+        c.send(new MapPacket(ground.width(), ground.height(), ground.tiles(), zoom));
     }
 
-    private MapPacket mapPacket() {
-        if (runtime == null || runtime.map() == null || runtime.map().layers().isEmpty()) return null;
-        var ground = runtime.map().layers().get(0);
-        return new MapPacket(ground.width(), ground.height(), ground.tiles());
+    private void sendFonts(OutputStream out, Path dir) {
+        if (dir == null || !Files.isDirectory(dir)) return;
+        try (var paths = Files.list(dir)) {
+            for (Path p : paths.filter(Files::isRegularFile).sorted().toList()) {
+                String n=p.getFileName().toString(), lower=n.toLowerCase(Locale.ROOT);
+                if (!(lower.endsWith(".ttf") || lower.endsWith(".otf"))) continue;
+                byte[] data=Files.readAllBytes(p);
+                if(data.length>(1<<19)){listener.error("Font too large, skipped: "+n);continue;}
+                Protocol.write(out,new Font(n,data));
+            }
+        } catch(IOException e){listener.error("Font streaming failed: "+e.getMessage());}
+    }
+
+    /**
+     * Normalizes a player-supplied character name: trims, collapses inner whitespace, strips
+     * control characters and enforces a maximum length. Throws when the result is unusable.
+     */
+    static String normalizePlayerName(String raw) {
+        if (raw == null) throw new IllegalArgumentException("character name is null");
+        // 1) trim, 2) drop control characters entirely, 3) collapse any remaining whitespace runs.
+        String s = raw.trim();
+        StringBuilder clean = new StringBuilder(s.length());
+        for (int i = 0; i < s.length(); i++) {
+            char ch = s.charAt(i);
+            if (ch >= 0x20) clean.append(ch);
+        }
+        s = clean.toString().replaceAll("\\s+", " ").trim();
+        if (s.isEmpty()) throw new IllegalArgumentException("character name has no usable characters");
+        if (s.length() > MAX_NAME_LENGTH)
+            throw new IllegalArgumentException("character name too long: " + raw);
+        return s;
+    }
+
+    /** Canonical identity of a character name: case-insensitive so saves and logins never collide by case. */
+    static String canonicalPlayerKey(String name) {
+        return name.toLowerCase(Locale.ROOT);
+    }
+
+    /**
+     * A token bucket, refilled at {@code capacity} tokens per second. Guards semantic actions so a
+     * misbehaving client can submit at most capacity actions per second instead of one per packet.
+     */
+    static final class ActionLimiter {
+        private final double capacity;
+        private double tokens;
+        private long lastRefillNanos;
+
+        ActionLimiter(double capacity) {
+            if (!(capacity > 0)) throw new IllegalArgumentException("invalid capacity: " + capacity);
+            this.capacity = capacity;
+            this.tokens = capacity;
+            this.lastRefillNanos = System.nanoTime();
+        }
+
+        synchronized boolean tryAcquire() {
+            long now = System.nanoTime();
+            tokens = Math.min(capacity, tokens + (now - lastRefillNanos) / 1e9 * capacity);
+            lastRefillNanos = now;
+            if (tokens >= 1.0) {
+                tokens -= 1.0;
+                return true;
+            }
+            return false;
+        }
+    }
+
+    static final class PortalGuard {
+        static final long COOLDOWN_NANOS = 500_000_000L;
+        private boolean mustExitPortal;
+        private long cooldownUntilNanos;
+
+        boolean canTransition(long nowNanos) { return nowNanos >= cooldownUntilNanos; }
+
+        boolean shouldActivatePortal(boolean insidePortal, long nowNanos) {
+            if (mustExitPortal) {
+                if (!insidePortal) mustExitPortal = false;
+                return false;
+            }
+            return insidePortal && canTransition(nowNanos);
+        }
+
+        void onTransition(long nowNanos) {
+            mustExitPortal = true;
+            cooldownUntilNanos = nowNanos + COOLDOWN_NANOS;
+        }
     }
 
     private static final class Client {
         final long entityId;
+        final String name;
+        volatile String regionId;
         final OutputStream out;
+        final ActionLimiter actions = new ActionLimiter(MAX_INPUT_ACTIONS_PER_SECOND);
+        final ActionLimiter inboundPackets = new ActionLimiter(MAX_INBOUND_PACKETS_PER_SECOND);
+        final PortalGuard portalGuard = new PortalGuard();
+        volatile long lastInputNanos;
         volatile boolean dismissed;
-        Client(long entityId, Socket s, OutputStream out) { this.entityId = entityId; this.out = out; }
-        synchronized void send(Packet p) {
-            if (dismissed) return;
-            try { Protocol.write(out, p); } catch (IOException ignored) { dismissed = true; }
+        Client(long entityId, String name, String regionId, OutputStream out) {
+            this.entityId = entityId;
+            this.name = name;
+            this.regionId = regionId;
+            this.out = out;
+            this.lastInputNanos = System.nanoTime();
         }
-        void dismiss() { dismissed = true; }
+        synchronized void send(Packet p){if(dismissed)return;try{Protocol.write(out,p);}catch(IOException ignored){dismissed=true;}}
+        void dismiss(){dismissed=true;}
     }
 }

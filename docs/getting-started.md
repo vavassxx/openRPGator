@@ -29,7 +29,7 @@ Flags: `--data-dir <dir>` (must contain a `host` sub-folder), `--port <n>`, `--t
 Docker or GPU required; the same JAR runs under Termux on Android ARM64:
 
     pkg install openjdk-21
-    java -jar dedicated-server/build/libs/dedicated-server-0.4.0.jar --data-dir <dir> --port 27800
+    java -jar dedicated-server/build/libs/dedicated-server-0.5.0.jar --data-dir <dir> --port 27800
 
 The Swing admin console runs the same server in-process (data dir + port persisted to
 `~/.openrpgator/server.properties`):

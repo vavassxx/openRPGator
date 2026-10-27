@@ -29,6 +29,12 @@ class ProtocolTest {
         assertEquals(3, mapRt.width());
         assertEquals(2, mapRt.height());
         assertArrayEquals(new int[]{0, 1, 2, 3, 4, 5}, mapRt.tiles());
+        assertFalse(mapRt.hasZoom(), "old map packets must stay zoom-less");
+
+        MapPacket zoomed = new MapPacket(3, 2, new int[]{0, 1, 2, 3, 4, 5}, 1.75);
+        MapPacket zoomedRt = (MapPacket) roundTrip(zoomed);
+        assertTrue(zoomedRt.hasZoom());
+        assertEquals(1.75, zoomedRt.zoom(), 1e-9);
     }
 
     @Test

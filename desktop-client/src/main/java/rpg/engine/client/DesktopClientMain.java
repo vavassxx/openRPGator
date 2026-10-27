@@ -97,6 +97,10 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
     private int connectPort = DEFAULT_PORT;
     private String playerName = DEFAULT_NAME;
     private Double zoomArg = null;
+    /** True once an explicit CLI or server zoom is in force; disables auto-fit. */
+    private boolean zoomLocked;
+    /** Map whose server-provided zoom still has to be applied on the render thread. */
+    private volatile MapPacket pendingZoom;
 
     private SettingsField nameField;
     private SettingsField tickRateField;
@@ -108,6 +112,8 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
     private volatile boolean connected;
     /** When enabled, the camera continuously follows the local player. */
     private boolean cameraFollow = true;
+    private final Map<Long, SmoothPosition> smoothPositions = new HashMap<>();
+    private record SmoothPosition(double x, double y, double elevation, long updatedAt) {}
 
     private final List<ToastRecord> toasts = new CopyOnWriteArrayList<>();
     private volatile ActiveDialog activeDialog;
@@ -132,6 +138,7 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
     private DesktopClientMain(String[] args) throws Exception {
         // ── Parse arguments ──────────────────────────────────────
         parseArgs(args);
+        zoomLocked = zoomArg != null;
         loadConfig();
 
         // The server host folder (~/.openrpgator/data/host) is created up-front, so starting the
@@ -555,6 +562,21 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
             else { screen = Screen.MENU; session.disconnect(); connected = false; statusText = "Offline"; return; }
         }
 
+        // A server-provided zoom arrives with MapPacket on the network thread. Apply it here,
+        // once, so it locks out auto-fit without fighting the player's later +/- input.
+        MapPacket pending = pendingZoom;
+        if (pending != null) {
+            pendingZoom = null;
+            if (pending.hasZoom()) {
+                renderer.setZoom(pending.zoom());
+                zoomLocked = true;
+            } else if (zoomArg == null) {
+                // A region without an explicit zoom falls back to the normal auto-fit.
+                renderer.setZoom(1.0);
+                zoomLocked = false;
+            }
+        }
+
         // ── Zoom: +/- keys ───────────────────────────────────────
         if (renderer.keyDown(LwjglRenderer.KEY_EQUAL) || renderer.keyDown(LwjglRenderer.KEY_KP_ADD))
             renderer.setZoom(renderer.zoom() * 1.02);
@@ -563,6 +585,28 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
 
         // ── Camera ───────────────────────────────────────────────
         Snapshot snap = latestSnapshot.get();
+        long now = System.nanoTime();
+        List<Snapshot.EntityState> displayed = new ArrayList<>(snap.entities().size());
+        Set<Long> seen = new HashSet<>();
+        for (Snapshot.EntityState e : snap.entities()) {
+            seen.add(e.id());
+            SmoothPosition old = smoothPositions.get(e.id());
+            double x = e.x(), y = e.y(), elevation = e.elevation();
+            if (old != null) {
+                double distance = Math.hypot(x - old.x(), y - old.y());
+                if (distance <= 4.0) {
+                    double dt = Math.max(0.0, Math.min(0.25, (now - old.updatedAt()) / 1_000_000_000.0));
+                    double alpha = 1.0 - Math.exp(-dt / 0.075);
+                    x = old.x() + (x - old.x()) * alpha;
+                    y = old.y() + (y - old.y()) * alpha;
+                    elevation = old.elevation() + (elevation - old.elevation()) * alpha;
+                }
+            }
+            smoothPositions.put(e.id(), new SmoothPosition(x, y, elevation, now));
+            displayed.add(new Snapshot.EntityState(e.id(), x, y, elevation, e.sprite(), e.scale()));
+        }
+        smoothPositions.keySet().retainAll(seen);
+        snap = new Snapshot(displayed);
         Snapshot.EntityState camTarget = null;
         long myId = localPlayerId.get();
         for (Snapshot.EntityState e : snap.entities()) {
@@ -575,7 +619,7 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
         } else if (netMap != null) renderer.setCamera(netMap.width() / 2.0, netMap.height() / 2.0);
 
         // ── Auto-fit map into view once ──────────────────────────
-        if (zoomArg == null && netMap != null && renderer.zoom() <= 1.0) {
+        if (!zoomLocked && netMap != null && renderer.zoom() <= 1.0) {
             double diag = Math.max(netMap.width(), netMap.height());
             double fit = Math.min(w / (diag * 32.0 + 32), h / (diag * 16.0 + 32));
             renderer.setZoom(Math.max(0.25, Math.min(fit, 4.0)));
@@ -837,7 +881,10 @@ public final class DesktopClientMain implements DesktopClientSession.Listener {
     }
 
     @Override public void onSnapshot(Snapshot s) { latestSnapshot.set(s); }
-    @Override public void onMap(MapPacket m) { netMap = m; }
+    @Override public void onMap(MapPacket m) {
+        netMap = m;
+        pendingZoom = m;
+    }
     @Override public void onFont(Font f) {
         try { renderer.setUiFont(f.name(), f.data()); }
         catch (RuntimeException e) { System.err.println("Font load failed: " + f.name() + ": " + e.getMessage()); }

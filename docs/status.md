@@ -1,7 +1,6 @@
 # Status
 
-Target version: **0.4.0**. This repository is a real, buildable foundation/vertical slice, not a
-collection of placeholder classes.
+Target version: **0.5.0**. This is an extensible RPG-engine foundation and playable vertical slice, not a complete MMO framework.
 
 ## Implemented
 
@@ -24,15 +23,22 @@ collection of placeholder classes.
 - Full map editor (tile/collision painting, `.pak` sprite placement, entity inspector with
   embedded Lua editor, undo/redo) and a standalone script editor — desktop and Android-native.
 - Android client: `GameView` guest renderer (floor streamed as `MapPacket`, snapshot sprites,
-  `UiLayout` renderer, scriptable HUD screens), touch controls with editable/persisted layouts,
-  pinch zoom, tap-to-widget forwarding, local server, and a map-editor activity.
+  `UiLayout` renderer, scriptable HUD screens), viewport-culling for streamed map tiles, touch
+  controls with editable/persisted layouts, pinch zoom, tap-to-widget forwarding, a scrollable Servers
+  screen with a persisted list of up to eight recent addresses, one-tap connection, local-host-and-join
+  flow, local server, and map editor.
+- Dedicated server ingress protection: bounded concurrent socket readers, a bounded inbound packet
+  queue drained with a per-tick budget, per-client packet rate limits, and rejection of sustained
+  floods or queue overload. Portal arrival requires leaving the destination portal zone before another
+  portal transition can trigger.
 - `.pak` asset pipeline end-to-end (pack → stream → cache → render).
 - Unit tests + smoke tests for the engine modules.
 
 ## Not yet production-complete
 
 - Full texture atlas and animation system (single-frame `.pak` sprites/tiles work end-to-end).
-- Prediction/interpolation and robust reconnect/authentication.
+- Client-side prediction is not implemented; snapshot smoothing is visual-only and server state remains authoritative.
+- Robust reconnect/authentication.
 - Packaging/signing for each desktop target.
 - Sandbox policy (full LuaJ access by design for the **host** runtime; host responsibility per
   project policy — server-pushed *client* scripts do run in a restricted `ui.*` sandbox).
@@ -42,8 +48,6 @@ collection of placeholder classes.
 
 Findings from running the scripted demo host ([examples/host/README.md](../examples/host/README.md)):
 
-- **Tile collisions.** The `.rmap` `collision` layer does not yet affect movement —
-  `CollisionWorld` only considers entities; walls are passable.
 - **Animations/atlases.** Single-frame sprites stream and render; no walk cycles or state-driven
   sprite swaps.
 - **Inventory/combat.** Purchase and chests are toasts only; there is no inventory component.
@@ -54,6 +58,7 @@ Findings from running the scripted demo host ([examples/host/README.md](../examp
 - **Persistence and multiplayer quest state.** Quest state lives in the script (the first player
   to take a quest wins it); no world saves, and players share one script state.
 - **Smarter AI.** Patrols teleport between points and ignore `CollisionWorld`; no pathfinding.
-- **Android device verification.** The game screen works end-to-end in the guest view (map floor,
-  HUD, toasts, dialogs, controls) but still wants interactive testing on a real device (CI is
-  SDK-only).
+- **Android device verification.** The game screen, viewport culling, server menu, local-host-and-join
+  flow, HUD, toasts, dialogs, and controls still need interactive verification on a real device
+  (CI is SDK-only).
+- **Region integration.** Use `examples/host/regions` for a two-region smoke test. Run both portal directions on the target platforms before release; entity identity is preserved, but game-specific inventory/quest/progression persistence remains the host's responsibility.
