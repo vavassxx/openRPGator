@@ -37,7 +37,7 @@ public final class ControlOverlay extends View {
             if(editMode){p.setStyle(Paint.Style.FILL);p.setTextAlign(Paint.Align.CENTER);p.setTextSize(Math.max(10,r*.22f));p.setColor(Color.WHITE);c.drawText("JOYSTICK",cx,cy+r*.72f,p);}
         }else{
             p.setStyle(Paint.Style.STROKE);p.setStrokeWidth(editMode&&b==selected?5:2);p.setColor(b==selected?Color.WHITE:Color.argb(160,255,255,255));c.drawCircle(cx,cy,r,p);
-            p.setStyle(Paint.Style.FILL);p.setTextAlign(Paint.Align.CENTER);p.setTextSize(Math.max(12,Math.min(22,r*.34f));p.setColor(Color.WHITE);String text=(b.label==null||b.label.isBlank())?b.action.title:b.label;c.drawText(text,cx,cy-p.ascent()/3,p);
+            p.setStyle(Paint.Style.FILL);p.setTextAlign(Paint.Align.CENTER);p.setTextSize(Math.max(12,Math.min(22,r*.34f)));p.setColor(Color.WHITE);String text=(b.label==null||b.label.isBlank())?b.action.title:b.label;c.drawText(text,cx,cy-p.ascent()/3,p);
             if(editMode){p.setTextSize(Math.max(10,r*.22f));p.setColor(Color.argb(230,255,255,180));c.drawText(b.action.title,cx,cy+r*.72f,p);}
         }
     }}
