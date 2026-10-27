@@ -546,11 +546,16 @@ public final class MainActivity extends Activity implements ClientSession.Listen
         type.setOnClickListener(v -> { overlay.cycleType(); if (overlay.selected() != null) status.setText("Type: " + overlay.selected().type.name()); });
         smaller.setOnClickListener(v -> { if (overlay.selected() != null) { overlay.selected().size = Math.max(.05f, overlay.selected().size - .02f); overlay.invalidate(); } });
         larger.setOnClickListener(v -> { if (overlay.selected() != null) { overlay.selected().size = Math.min(.35f, overlay.selected().size + .02f); overlay.invalidate(); } });
-        add.setOnClickListener(v -> {
-            ControlBinding b = controls.addCustom(ControlAction.PRIMARY, ControlType.BUTTON, .5f, .5f, .12f, "A");
-            overlay.select(b);
-            status.setText("New button: drag to position");
-        });
+        add.setOnClickListener(v -> new AlertDialog.Builder(this)
+            .setTitle("Add touch control")
+            .setItems(new String[]{"Action button", "Movement joystick"}, (dialog, which) -> {
+                ControlBinding b = which == 1
+                    ? controls.addCustom(ControlAction.MOVE_UP, ControlType.JOYSTICK, .14f, .78f, .23f, "◎")
+                    : controls.addCustom(ControlAction.PRIMARY, ControlType.BUTTON, .5f, .5f, .12f, "A");
+                overlay.select(b);
+                overlay.invalidate();
+                status.setText(which == 1 ? "New joystick: drag to position" : "New button: drag to position");
+            }).show());
         remove.setOnClickListener(v -> { if (overlay.selected() != null) { controls.remove(overlay.selected()); overlay.invalidate(); status.setText("Button removed"); } });
 
         panel.addView(body, new LinearLayout.LayoutParams(-1, -2));
@@ -1072,7 +1077,6 @@ public final class MainActivity extends Activity implements ClientSession.Listen
                 displayed.add(new Snapshot.EntityState(e.id(), x, y, elevation, e.sprite(), e.scale()));
             }
             smoothPositions.keySet().retainAll(seen);
-            snapshot = new Snapshot(displayed);
             c.drawColor(Color.rgb(36, 48, 42));
             // The paint is shared with the widget/toast overlay, which leaves semi-transparent
             // colors behind (toast fade-out ends near alpha 0). Tiles and sprites are drawn with
@@ -1083,7 +1087,7 @@ public final class MainActivity extends Activity implements ClientSession.Listen
             float ox = getWidth() / 2f, oy = getHeight() / 3f;
             if (cameraFollow) {
                 Snapshot.EntityState target = null;
-                for (Snapshot.EntityState e : snapshot.entities()) {
+                for (Snapshot.EntityState e : displayed) {
                     if (e.id() == localPlayerId) { target = e; break; }
                 }
                 if (target != null) {
@@ -1133,7 +1137,7 @@ public final class MainActivity extends Activity implements ClientSession.Listen
                 }
             }
             // Без карты (нет соединения / сервер без карты) пол пустой: пустой игровой экран.
-            for (Snapshot.EntityState e : snapshot.entities()) {
+            for (Snapshot.EntityState e : displayed) {
                 float sx = ox + (float)(e.x() - e.y()) * tile * .5f;
                 float sy = oy + (float)(e.x() + e.y()) * tile * .25f - (float)e.elevation() * 12 * zoom;
                 Bitmap bmp = atlas.spriteImage(e.sprite());
