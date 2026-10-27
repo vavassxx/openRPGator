@@ -11,3 +11,8 @@ out-android/
 dist/
 build-apk.sh
 build-linux-x86_64.sh
+
+# Local patch artifacts, temporary source backups, and downloaded repository snapshots
+*.patch
+*.tar.gz
+*.before-*

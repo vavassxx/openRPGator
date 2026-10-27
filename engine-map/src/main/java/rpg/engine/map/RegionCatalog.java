@@ -18,7 +18,7 @@ public final class RegionCatalog {
         if (!Files.isDirectory(directory)) throw new IOException("region directory not found: " + directory);
         Map<String, Entry> loaded = new LinkedHashMap<>();
         try (var paths = Files.list(directory)) {
-            for (Path path : paths.filter(p -> p.getFileName().toString().endsWith(".rmap")).sorted().toList()) {
+            for (Path path : paths.filter(p -> p.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".rmap")).sorted().toList()) {
                 String file = path.getFileName().toString();
                 String id = file.substring(0, file.length() - ".rmap".length()).trim().toLowerCase(Locale.ROOT);
                 if (id.isBlank()) throw new IOException("blank region id: " + path);

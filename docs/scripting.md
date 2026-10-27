@@ -13,11 +13,12 @@ the host are the opposite: they run in a restricted `ui.*` sandbox — see [Clie
 
 | Lua | Return | Description |
 |-----|--------|-------------|
-| `engine.version` | string | API version (`"0.4.0"`) |
+| `engine.version` | string | API version (`"0.5.0"`) |
 | `engine.tick` | number | Current world tick (updated per step) |
 | `engine.log(msg)` | — | Prints `[Lua] msg` to stdout |
 | `engine.on_tick(fn)` | — | Register a global tick handler (arg = tick number) |
 | `engine.set_zoom(zoom)` | — | Sets the region's initial camera zoom for joining players (`0` restores the client default); sent with `MapPacket`, including on region transitions |
+| `engine.transition(player, targetRegion, x, y[, elevation])` | boolean | Requests a host-validated transfer to a loaded region; the host owns player persistence and transition policy |
 | `engine.notify(msg)` | — | Broadcast a toast notification to all connected players (`UiSink.broadcastNotify`) |
 | `engine.dialog(player, text, {choice,...}, fn(idx))` | — | Open a modal choice dialog for one player; `fn` fires with the 1-based choice on answer |
 | `engine.layout(player, widgets, strings)` | — | Push a host-driven widget schema to one player (`UiSink.layoutTo`); clients render `panel`/`bar`/`text`/`button` blindly |

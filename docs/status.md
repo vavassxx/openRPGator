@@ -1,7 +1,6 @@
 # Status
 
-Target version: **0.5.0**. This repository is a real, buildable foundation/vertical slice, not a
-collection of placeholder classes.
+Target version: **0.5.0**. This is an extensible RPG-engine foundation and playable vertical slice, not a complete MMO framework.
 
 ## Implemented
 
@@ -62,7 +61,4 @@ Findings from running the scripted demo host ([examples/host/README.md](../examp
 - **Android device verification.** The game screen, viewport culling, server menu, local-host-and-join
   flow, HUD, toasts, dialogs, and controls still need interactive verification on a real device
   (CI is SDK-only).
-- **Region integration verification.** Region catalog loading, deterministic initial-region selection,
-  portal re-entry protection, destination map delivery, and state migration need end-to-end host testing;
-  migration preserves entity identity but game-specific inventory/quest/progression persistence
-  remains the host's responsibility.
+- **Region integration.** Use `examples/host/regions` for a two-region smoke test. Run both portal directions on the target platforms before release; entity identity is preserved, but game-specific inventory/quest/progression persistence remains the host's responsibility.

@@ -47,7 +47,7 @@ public final class LuaApi {
     private volatile WorldPosition spawnPoint = new WorldPosition(0, 0, 0);
     /** Region-level initial camera zoom; 0 means "let the client decide". */
     private volatile double viewZoom;
-    private String version = "0.4.0";
+    private String version = "0.5.0";
 
     private final Map<EntityId, List<LuaFunction>> tickHandlers = new LinkedHashMap<>();
     private final Map<EntityId, List<LuaFunction>> enterHandlers = new LinkedHashMap<>();
