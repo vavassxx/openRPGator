@@ -25,8 +25,13 @@ collection of placeholder classes.
   embedded Lua editor, undo/redo) and a standalone script editor — desktop and Android-native.
 - Android client: `GameView` guest renderer (floor streamed as `MapPacket`, snapshot sprites,
   `UiLayout` renderer, scriptable HUD screens), viewport-culling for streamed map tiles, touch
-  controls with editable/persisted layouts, pinch zoom, tap-to-widget forwarding, a Servers screen
-  with last-used connection details and local-host-and-join flow, local server, and map editor.
+  controls with editable/persisted layouts, pinch zoom, tap-to-widget forwarding, a scrollable Servers
+  screen with a persisted list of up to eight recent addresses, one-tap connection, local-host-and-join
+  flow, local server, and map editor.
+- Dedicated server ingress protection: bounded concurrent socket readers, a bounded inbound packet
+  queue drained with a per-tick budget, per-client packet rate limits, and rejection of sustained
+  floods or queue overload. Portal arrival requires leaving the destination portal zone before another
+  portal transition can trigger.
 - `.pak` asset pipeline end-to-end (pack → stream → cache → render).
 - Unit tests + smoke tests for the engine modules.
 
@@ -58,6 +63,6 @@ Findings from running the scripted demo host ([examples/host/README.md](../examp
   flow, HUD, toasts, dialogs, and controls still need interactive verification on a real device
   (CI is SDK-only).
 - **Region integration verification.** Region catalog loading, deterministic initial-region selection,
-  portal transitions, destination map delivery, and state migration need end-to-end host testing;
+  portal re-entry protection, destination map delivery, and state migration need end-to-end host testing;
   migration preserves entity identity but game-specific inventory/quest/progression persistence
   remains the host's responsibility.

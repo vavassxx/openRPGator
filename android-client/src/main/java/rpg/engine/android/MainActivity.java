@@ -189,6 +189,50 @@ public final class MainActivity extends Activity implements ClientSession.Listen
         subtitle.setPadding(0, dp(5), 0, dp(18));
         root.addView(subtitle);
 
+        root.addView(sectionLabel("SAVED SERVERS"));
+        LinearLayout savedList = new LinearLayout(this);
+        savedList.setOrientation(LinearLayout.VERTICAL);
+        List<String[]> savedServers = loadSavedServers();
+        if (savedServers.isEmpty()) {
+            TextView empty = new TextView(this);
+            empty.setText("No saved servers yet. Connect once to add an address.");
+            empty.setTextColor(Color.rgb(120, 129, 146));
+            empty.setTextSize(12);
+            empty.setPadding(0, dp(4), 0, dp(10));
+            savedList.addView(empty);
+        } else {
+            for (String[] server : savedServers) {
+                String savedHost = server[0];
+                String savedPort = server[1];
+                LinearLayout row = new LinearLayout(this);
+                row.setOrientation(LinearLayout.HORIZONTAL);
+                row.setGravity(Gravity.CENTER_VERTICAL);
+                row.setPadding(dp(8), dp(2), dp(4), dp(2));
+                row.setBackgroundColor(Color.rgb(27, 30, 38));
+                TextView address = new TextView(this);
+                address.setText(savedHost + ":" + savedPort);
+                address.setTextColor(Color.rgb(225, 230, 240));
+                address.setTextSize(13);
+                row.addView(address, new LinearLayout.LayoutParams(0, dp(44), 1));
+                Button use = actionButton("Connect", "Connect to " + savedHost + ":" + savedPort);
+                use.setOnClickListener(v -> connectToServer(savedHost, savedPort,
+                        prefs.getString("last_name", "player")));
+                row.addView(use, new LinearLayout.LayoutParams(-2, dp(44)));
+                Button remove = actionButton("×", "Remove saved server");
+                remove.setOnClickListener(v -> {
+                    List<String[]> current = loadSavedServers();
+                    current.removeIf(entry -> entry[0].equals(savedHost) && entry[1].equals(savedPort));
+                    saveSavedServers(current);
+                    showServerMenu();
+                });
+                row.addView(remove, new LinearLayout.LayoutParams(-2, dp(44)));
+                LinearLayout.LayoutParams rowLp = new LinearLayout.LayoutParams(-1, -2);
+                rowLp.bottomMargin = dp(5);
+                savedList.addView(row, rowLp);
+            }
+        }
+        root.addView(savedList, new LinearLayout.LayoutParams(-1, -2));
+
         root.addView(sectionLabel("SERVER ADDRESS"));
         EditText host = field("Address", prefs.getString("last_host", "127.0.0.1"));
         EditText port = field("Port", prefs.getString("last_port", "27991"));
@@ -200,24 +244,9 @@ public final class MainActivity extends Activity implements ClientSession.Listen
         Button connect = actionButton("Connect", "Connect to this server");
         connect.setTextSize(14);
         root.addView(connect, new LinearLayout.LayoutParams(-1, dp(50)));
-        connect.setOnClickListener(v -> {
-            String h = host.getText().toString().trim();
-            String p = port.getText().toString().trim();
-            String n = name.getText().toString().trim();
-            try {
-                int portNumber = Integer.parseInt(p);
-                if (h.isEmpty() || n.isEmpty() || portNumber < 1 || portNumber > 65535)
-                    throw new IllegalArgumentException("Enter a host, name, and valid port (1–65535)");
-                prefs.edit().putString("last_host", h).putString("last_port", p)
-                    .putString("last_name", n).apply();
-                showGame();
-                if (connectButton != null) connectButton.performClick();
-            } catch (Exception e) {
-                new AlertDialog.Builder(this).setTitle("Cannot connect")
-                    .setMessage(e.getMessage() == null ? "Invalid server address or port" : e.getMessage())
-                    .setPositiveButton("OK", null).show();
-            }
-        });
+        connect.setOnClickListener(v -> connectToServer(
+                host.getText().toString().trim(), port.getText().toString().trim(),
+                name.getText().toString().trim()));
 
         Button local = actionButton("Host local world", "Start the local server and join it");
         local.setTextSize(14);
@@ -229,6 +258,7 @@ public final class MainActivity extends Activity implements ClientSession.Listen
             String n = prefs.getString("last_name", "player");
             prefs.edit().putString("last_host", "127.0.0.1").putString("last_port", p)
                 .putString("last_name", n).apply();
+            rememberSavedServer("127.0.0.1", p);
             showGame();
             if (localServerButton != null) localServerButton.performClick();
             if (connectButton != null) connectButton.performClick();
@@ -239,7 +269,68 @@ public final class MainActivity extends Activity implements ClientSession.Listen
         Button back = actionButton("Back to menu", "Return to the main menu");
         root.addView(back, new LinearLayout.LayoutParams(-1, dp(48)));
         back.setOnClickListener(v -> showMainMenu());
-        setContentView(root);
+        ScrollView scroll = new ScrollView(this);
+        scroll.setFillViewport(true);
+        scroll.addView(root);
+        setContentView(scroll);
+    }
+
+    private void connectToServer(String host, String port, String name) {
+        try {
+            int portNumber = Integer.parseInt(port);
+            if (host.isEmpty() || name.isEmpty() || portNumber < 1 || portNumber > 65535)
+                throw new IllegalArgumentException("Enter a host, name, and valid port (1–65535)");
+            prefs.edit().putString("last_host", host).putString("last_port", port)
+                    .putString("last_name", name).apply();
+            rememberSavedServer(host, port);
+            showGame();
+            if (connectButton != null) connectButton.performClick();
+        } catch (Exception e) {
+            new AlertDialog.Builder(this).setTitle("Cannot connect")
+                    .setMessage(e.getMessage() == null ? "Invalid server address or port" : e.getMessage())
+                    .setPositiveButton("OK", null).show();
+        }
+    }
+
+    private List<String[]> loadSavedServers() {
+        List<String[]> result = new ArrayList<>();
+        try {
+            org.json.JSONArray array = new org.json.JSONArray(prefs.getString("saved_servers", "[]"));
+            for (int i = 0; i < array.length(); i++) {
+                org.json.JSONObject item = array.optJSONObject(i);
+                if (item == null) continue;
+                String host = item.optString("host", "").trim();
+                String port = item.optString("port", "").trim();
+                if (!host.isEmpty() && !port.isEmpty()) result.add(new String[]{host, port});
+            }
+        } catch (Exception ignored) { }
+        return result;
+    }
+
+    private void rememberSavedServer(String host, String port) {
+        List<String[]> next = new ArrayList<>();
+        next.add(new String[]{host, port});
+        for (String[] entry : loadSavedServers()) {
+            if (entry[0].equalsIgnoreCase(host) && entry[1].equals(port)) continue;
+            if (next.size() >= 8) break;
+            next.add(entry);
+        }
+        saveSavedServers(next);
+    }
+
+    private void saveSavedServers(List<String[]> servers) {
+        org.json.JSONArray array = new org.json.JSONArray();
+        try {
+            for (String[] server : servers) {
+                org.json.JSONObject item = new org.json.JSONObject();
+                item.put("host", server[0]);
+                item.put("port", server[1]);
+                array.put(item);
+            }
+            prefs.edit().putString("saved_servers", array.toString()).apply();
+        } catch (org.json.JSONException e) {
+            logger.error("Could not save server list", e);
+        }
     }
 
     private void onMenu(String label) {

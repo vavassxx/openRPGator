@@ -52,6 +52,30 @@ class ServerHostPolicyTest {
     }
 
     @Test
+    void portalGuardRequiresLeavingDestinationPortalBeforeReactivation() {
+        ServerHost.PortalGuard guard = new ServerHost.PortalGuard();
+        long now = 1_000_000_000L;
+        assertTrue(guard.shouldActivatePortal(true, now));
+        guard.onTransition(now);
+        assertFalse(guard.canTransition(now + 100_000_000L));
+        assertFalse(guard.shouldActivatePortal(true, now + 1_000_000_000L),
+                "standing inside a destination portal must not immediately retrigger it");
+        assertFalse(guard.shouldActivatePortal(false, now + 1_100_000_000L),
+                "the first frame outside a portal only rearms the guard");
+        assertTrue(guard.shouldActivatePortal(true, now + 1_200_000_000L),
+                "a portal can activate again after leaving and re-entering");
+    }
+
+    @Test
+    void portalGuardAllowsTransitionsAgainAfterCooldown() {
+        ServerHost.PortalGuard guard = new ServerHost.PortalGuard();
+        long now = 2_000_000_000L;
+        guard.onTransition(now);
+        assertFalse(guard.canTransition(now + ServerHost.PortalGuard.COOLDOWN_NANOS - 1));
+        assertTrue(guard.canTransition(now + ServerHost.PortalGuard.COOLDOWN_NANOS));
+    }
+
+    @Test
     void actionLimiterRejectsInvalidCapacity() {
         assertThrows(IllegalArgumentException.class, () -> new ServerHost.ActionLimiter(0));
         assertThrows(IllegalArgumentException.class, () -> new ServerHost.ActionLimiter(-1));

@@ -1,0 +1,463 @@
+--- a/dedicated-server/src/main/java/rpg/engine/server/ServerHost.java
++++ b/dedicated-server/src/main/java/rpg/engine/server/ServerHost.java
+@@ -28,6 +28,16 @@
+     /** Default snapshot interest radius in world tiles (entities beyond it are not streamed). */
+     public static final double DEFAULT_VIEW_RADIUS = 24.0;
+     static final int MAX_INPUT_ACTIONS_PER_SECOND = 24;
++    /** Incoming packets accepted per second per client, with a token-bucket burst allowance. */
++    static final int MAX_INBOUND_PACKETS_PER_SECOND = 60;
++    /** Bound concurrent socket readers; excess connections are rejected rather than spawning threads forever. */
++    static final int MAX_CLIENT_CONNECTIONS = 64;
++    /** Global bound on pending client packets. */
++    static final int INBOUND_QUEUE_CAPACITY = 4096;
++    /** Maximum number of queued packets processed during one world tick. */
++    static final int MAX_INBOUND_PACKETS_PER_TICK = 512;
++    static final int MAX_CONSECUTIVE_INBOUND_DROPS = 64;
++    static final int MAX_CONSECUTIVE_QUEUE_OVERFLOWS = 8;
+     static final int MAX_NAME_LENGTH = 24;
+ 
+     public record Config(Path map, List<Path> paks, int port, int tickHz, Path dataDir,
+@@ -58,6 +68,8 @@
+     /** Canonical (case-insensitive) character name → entity id; guards against duplicate logins. */
+     private final Map<String, Long> activeNames = new ConcurrentHashMap<>();
+     private final RegionManager regions = new RegionManager();
++    private final BlockingQueue<InboundPacket> inboundPackets = new ArrayBlockingQueue<>(INBOUND_QUEUE_CAPACITY);
++    private volatile int inboundPacketBudget = 240;
+     private volatile double playerSpeed = DEFAULT_PLAYER_SPEED;
+     private volatile double viewRadius = DEFAULT_VIEW_RADIUS;
+     private ExecutorService exec;
+@@ -103,6 +115,8 @@
+         if (running) return;
+         playerSpeed = cfg.playerSpeed();
+         viewRadius = cfg.viewRadius();
++        inboundPackets.clear();
++        inboundPacketBudget = Math.max(64, Math.min(MAX_INBOUND_PACKETS_PER_TICK, cfg.tickHz() * 12));
+         regions.clear();
+         Path hostDir = cfg.dataDir() == null ? null : cfg.dataDir().resolve("host");
+         if (hostDir != null) Files.createDirectories(hostDir);
+@@ -160,6 +174,7 @@
+         tick.scheduleAtFixedRate(() -> {
+             try {
+                 synchronized (worldLock) {
++                    drainInboundPackets(inboundPacketBudget);
+                     for (RegionRuntime region : regions.all())
+                         region.runtime().setPlayers(playersIn(region.id()));
+                     regions.tick(null);
+@@ -169,7 +184,12 @@
+         }, 0, tickMs, TimeUnit.MILLISECONDS);
+         listener.log("World tick @ " + cfg.tickHz() + " Hz across " + regions.ids().size() + " region(s) (" + tickMs + " ms)");
+ 
+-        exec = Executors.newCachedThreadPool();
++        exec = new ThreadPoolExecutor(0, MAX_CLIENT_CONNECTIONS, 30L, TimeUnit.SECONDS,
++                new SynchronousQueue<>(), runnable -> {
++                    Thread thread = new Thread(runnable, "openrpg-client");
++                    thread.setDaemon(true);
++                    return thread;
++                }, new ThreadPoolExecutor.AbortPolicy());
+         server = new ServerSocket(cfg.port());
+         server.setReuseAddress(true);
+         running = true;
+@@ -185,6 +205,7 @@
+         try { if (server != null) server.close(); } catch (IOException ignored) {}
+         if (exec != null) exec.shutdownNow();
+         if (tick != null) tick.shutdown();
++        inboundPackets.clear();
+         synchronized (worldLock) {
+             for (Client c : new ArrayList<>(clients.values())) {
+                 RegionRuntime region = regions.find(c.regionId).orElse(null);
+@@ -201,7 +222,12 @@
+         while (running) {
+             try {
+                 Socket s = server.accept();
+-                exec.submit(() -> client(s));
++                try {
++                    exec.execute(() -> client(s));
++                } catch (RejectedExecutionException full) {
++                    try { s.close(); } catch (IOException ignored) { }
++                    listener.error("Connection rejected: server is at client capacity");
++                }
+             } catch (IOException e) {
+                 if (running) listener.error("accept error: " + e.getMessage());
+             }
+@@ -211,28 +237,39 @@
+     private void client(Socket s) {
+         Client client = null;
+         try (s) {
++            // Do not let silent sockets occupy all bounded client-reader threads forever.
++            s.setSoTimeout(5000);
+             InputStream in = s.getInputStream();
+             OutputStream out = s.getOutputStream();
+             Packet hello = Protocol.read(in);
+             if (!(hello instanceof Hello h)) return;
++            s.setSoTimeout(0);
+             synchronized (worldLock) { client = spawnPlayer(h.name(), out); }
+             if (!pakFiles.isEmpty()) PakStreamer.send(out, pakFiles);
+             Protocol.write(out, new Welcome(client.entityId));
+             sendFonts(out, fontDir);
+             clients.put(client.entityId, client);
+             sendMap(client);
++            int rateLimitDrops = 0;
++            int queueOverflowDrops = 0;
+             while (running && !s.isClosed()) {
+                 Packet q = Protocol.read(in);
+-                if (q instanceof Input x) applyInput(client.entityId, x);
+-                else if (q instanceof DialogResponse r) {
+-                    synchronized (worldLock) {
+-                        currentRuntime(client.entityId).respondDialog(r.dialogId(), r.choice());
++                if (!client.inboundPackets.tryAcquire()) {
++                    if (++rateLimitDrops >= MAX_CONSECUTIVE_INBOUND_DROPS) {
++                        listener.error("Disconnecting " + client.name + ": inbound packet rate exceeded");
++                        break;
+                     }
+-                } else if (q instanceof Cmd c) {
+-                    synchronized (worldLock) {
+-                        currentRuntime(client.entityId).dispatchCommand(client.entityId, c.code(), c.arg());
++                    continue;
++                }
++                rateLimitDrops = 0;
++                if (!inboundPackets.offer(new InboundPacket(client, q))) {
++                    if (++queueOverflowDrops >= MAX_CONSECUTIVE_QUEUE_OVERFLOWS) {
++                        listener.error("Disconnecting " + client.name + ": inbound packet queue is full");
++                        break;
+                     }
++                    continue;
+                 }
++                queueOverflowDrops = 0;
+             }
+         } catch (Exception ignored) {
+         } finally {
+@@ -336,14 +373,18 @@
+             // region. A transition must not make a queued action accidentally execute in
+             // the wrong region on the next tick.
+             Optional<MapPortal> portal = regions.portalAt(region.id(), pos);
+-            portal.ifPresent(p -> transitionPlayer(entityId, region.id(), p.targetRegion(), p.targetPosition()));
+-            broadcastSnapshots();
++            if (c.portalGuard.shouldActivatePortal(portal.isPresent(), System.nanoTime())) {
++                MapPortal p = portal.orElseThrow();
++                transitionPlayer(entityId, region.id(), p.targetRegion(), p.targetPosition());
++            }
+         }
+     }
+ 
+     private boolean transitionPlayer(long entityId, String expectedSourceRegion, String targetRegion, WorldPosition target) {
+         Client c = clients.get(entityId);
+         if (c == null) return false;
++        long transitionNow = System.nanoTime();
++        if (!c.portalGuard.canTransition(transitionNow)) return false;
+         String from = c.regionId;
+         String expected = expectedSourceRegion == null ? null : expectedSourceRegion.trim().toLowerCase(Locale.ROOT);
+         // A region's Lua runtime may only move players that currently belong to that
+@@ -358,6 +399,7 @@
+         boolean moved = regions.migrate(new EntityId(entityId), from, to, target);
+         if (!moved) return false;
+         c.regionId = to;
++        c.portalGuard.onTransition(transitionNow);
+ 
+         // Reconstruct only the host-owned session representation needed by the destination world.
+         // Inventory/progression/etc. are deliberately untouched; scripts decide how persistent
+@@ -371,6 +413,31 @@
+         listener.log("Player " + c.name + " transitioned " + from + " -> " + to);
+         return true;
+     }
++
++    private void drainInboundPackets(int budget) {
++        for (int i = 0; i < budget; i++) {
++            InboundPacket inbound = inboundPackets.poll();
++            if (inbound == null) return;
++            Client client = inbound.client();
++            // Ignore stale queued packets from a client that has already disconnected.
++            if (client.dismissed || clients.get(client.entityId) != client) continue;
++            try {
++                Packet packet = inbound.packet();
++                if (packet instanceof Input input) {
++                    applyInput(client.entityId, input);
++                } else if (packet instanceof DialogResponse response) {
++                    currentRuntime(client.entityId).respondDialog(response.dialogId(), response.choice());
++                } else if (packet instanceof Cmd command) {
++                    currentRuntime(client.entityId).dispatchCommand(client.entityId, command.code(), command.arg());
++                }
++            } catch (RuntimeException rejected) {
++                listener.error("Rejected packet from " + client.name + ": " +
++                        (rejected.getMessage() == null ? rejected.getClass().getSimpleName() : rejected.getMessage()));
++            }
++        }
++    }
++
++    private record InboundPacket(Client client, Packet packet) {}
+ 
+     private void broadcastSnapshots() {
+         Map<String, List<Snapshot.EntityState>> byRegion = new HashMap<>();
+@@ -491,12 +558,35 @@
+         }
+     }
+ 
++    static final class PortalGuard {
++        static final long COOLDOWN_NANOS = 500_000_000L;
++        private boolean mustExitPortal;
++        private long cooldownUntilNanos;
++
++        boolean canTransition(long nowNanos) { return nowNanos >= cooldownUntilNanos; }
++
++        boolean shouldActivatePortal(boolean insidePortal, long nowNanos) {
++            if (mustExitPortal) {
++                if (!insidePortal) mustExitPortal = false;
++                return false;
++            }
++            return insidePortal && canTransition(nowNanos);
++        }
++
++        void onTransition(long nowNanos) {
++            mustExitPortal = true;
++            cooldownUntilNanos = nowNanos + COOLDOWN_NANOS;
++        }
++    }
++
+     private static final class Client {
+         final long entityId;
+         final String name;
+         volatile String regionId;
+         final OutputStream out;
+         final ActionLimiter actions = new ActionLimiter(MAX_INPUT_ACTIONS_PER_SECOND);
++        final ActionLimiter inboundPackets = new ActionLimiter(MAX_INBOUND_PACKETS_PER_SECOND);
++        final PortalGuard portalGuard = new PortalGuard();
+         volatile long lastInputNanos;
+         volatile boolean dismissed;
+         Client(long entityId, String name, String regionId, OutputStream out) {
+--- a/android-client/src/main/java/rpg/engine/android/MainActivity.java
++++ b/android-client/src/main/java/rpg/engine/android/MainActivity.java
+@@ -189,6 +189,50 @@
+         subtitle.setPadding(0, dp(5), 0, dp(18));
+         root.addView(subtitle);
+ 
++        root.addView(sectionLabel("SAVED SERVERS"));
++        LinearLayout savedList = new LinearLayout(this);
++        savedList.setOrientation(LinearLayout.VERTICAL);
++        List<String[]> savedServers = loadSavedServers();
++        if (savedServers.isEmpty()) {
++            TextView empty = new TextView(this);
++            empty.setText("No saved servers yet. Connect once to add an address.");
++            empty.setTextColor(Color.rgb(120, 129, 146));
++            empty.setTextSize(12);
++            empty.setPadding(0, dp(4), 0, dp(10));
++            savedList.addView(empty);
++        } else {
++            for (String[] server : savedServers) {
++                String savedHost = server[0];
++                String savedPort = server[1];
++                LinearLayout row = new LinearLayout(this);
++                row.setOrientation(LinearLayout.HORIZONTAL);
++                row.setGravity(Gravity.CENTER_VERTICAL);
++                row.setPadding(dp(8), dp(2), dp(4), dp(2));
++                row.setBackgroundColor(Color.rgb(27, 30, 38));
++                TextView address = new TextView(this);
++                address.setText(savedHost + ":" + savedPort);
++                address.setTextColor(Color.rgb(225, 230, 240));
++                address.setTextSize(13);
++                row.addView(address, new LinearLayout.LayoutParams(0, dp(44), 1));
++                Button use = actionButton("Connect", "Connect to " + savedHost + ":" + savedPort);
++                use.setOnClickListener(v -> connectToServer(savedHost, savedPort,
++                        prefs.getString("last_name", "player")));
++                row.addView(use, new LinearLayout.LayoutParams(-2, dp(44)));
++                Button remove = actionButton("×", "Remove saved server");
++                remove.setOnClickListener(v -> {
++                    List<String[]> current = loadSavedServers();
++                    current.removeIf(entry -> entry[0].equals(savedHost) && entry[1].equals(savedPort));
++                    saveSavedServers(current);
++                    showServerMenu();
++                });
++                row.addView(remove, new LinearLayout.LayoutParams(-2, dp(44)));
++                LinearLayout.LayoutParams rowLp = new LinearLayout.LayoutParams(-1, -2);
++                rowLp.bottomMargin = dp(5);
++                savedList.addView(row, rowLp);
++            }
++        }
++        root.addView(savedList, new LinearLayout.LayoutParams(-1, -2));
++
+         root.addView(sectionLabel("SERVER ADDRESS"));
+         EditText host = field("Address", prefs.getString("last_host", "127.0.0.1"));
+         EditText port = field("Port", prefs.getString("last_port", "27991"));
+@@ -200,24 +244,9 @@
+         Button connect = actionButton("Connect", "Connect to this server");
+         connect.setTextSize(14);
+         root.addView(connect, new LinearLayout.LayoutParams(-1, dp(50)));
+-        connect.setOnClickListener(v -> {
+-            String h = host.getText().toString().trim();
+-            String p = port.getText().toString().trim();
+-            String n = name.getText().toString().trim();
+-            try {
+-                int portNumber = Integer.parseInt(p);
+-                if (h.isEmpty() || n.isEmpty() || portNumber < 1 || portNumber > 65535)
+-                    throw new IllegalArgumentException("Enter a host, name, and valid port (1–65535)");
+-                prefs.edit().putString("last_host", h).putString("last_port", p)
+-                    .putString("last_name", n).apply();
+-                showGame();
+-                if (connectButton != null) connectButton.performClick();
+-            } catch (Exception e) {
+-                new AlertDialog.Builder(this).setTitle("Cannot connect")
+-                    .setMessage(e.getMessage() == null ? "Invalid server address or port" : e.getMessage())
+-                    .setPositiveButton("OK", null).show();
+-            }
+-        });
++        connect.setOnClickListener(v -> connectToServer(
++                host.getText().toString().trim(), port.getText().toString().trim(),
++                name.getText().toString().trim()));
+ 
+         Button local = actionButton("Host local world", "Start the local server and join it");
+         local.setTextSize(14);
+@@ -229,6 +258,7 @@
+             String n = prefs.getString("last_name", "player");
+             prefs.edit().putString("last_host", "127.0.0.1").putString("last_port", p)
+                 .putString("last_name", n).apply();
++            rememberSavedServer("127.0.0.1", p);
+             showGame();
+             if (localServerButton != null) localServerButton.performClick();
+             if (connectButton != null) connectButton.performClick();
+@@ -239,7 +269,68 @@
+         Button back = actionButton("Back to menu", "Return to the main menu");
+         root.addView(back, new LinearLayout.LayoutParams(-1, dp(48)));
+         back.setOnClickListener(v -> showMainMenu());
+-        setContentView(root);
++        ScrollView scroll = new ScrollView(this);
++        scroll.setFillViewport(true);
++        scroll.addView(root);
++        setContentView(scroll);
++    }
++
++    private void connectToServer(String host, String port, String name) {
++        try {
++            int portNumber = Integer.parseInt(port);
++            if (host.isEmpty() || name.isEmpty() || portNumber < 1 || portNumber > 65535)
++                throw new IllegalArgumentException("Enter a host, name, and valid port (1–65535)");
++            prefs.edit().putString("last_host", host).putString("last_port", port)
++                    .putString("last_name", name).apply();
++            rememberSavedServer(host, port);
++            showGame();
++            if (connectButton != null) connectButton.performClick();
++        } catch (Exception e) {
++            new AlertDialog.Builder(this).setTitle("Cannot connect")
++                    .setMessage(e.getMessage() == null ? "Invalid server address or port" : e.getMessage())
++                    .setPositiveButton("OK", null).show();
++        }
++    }
++
++    private List<String[]> loadSavedServers() {
++        List<String[]> result = new ArrayList<>();
++        try {
++            org.json.JSONArray array = new org.json.JSONArray(prefs.getString("saved_servers", "[]"));
++            for (int i = 0; i < array.length(); i++) {
++                org.json.JSONObject item = array.optJSONObject(i);
++                if (item == null) continue;
++                String host = item.optString("host", "").trim();
++                String port = item.optString("port", "").trim();
++                if (!host.isEmpty() && !port.isEmpty()) result.add(new String[]{host, port});
++            }
++        } catch (Exception ignored) { }
++        return result;
++    }
++
++    private void rememberSavedServer(String host, String port) {
++        List<String[]> next = new ArrayList<>();
++        next.add(new String[]{host, port});
++        for (String[] entry : loadSavedServers()) {
++            if (entry[0].equalsIgnoreCase(host) && entry[1].equals(port)) continue;
++            if (next.size() >= 8) break;
++            next.add(entry);
++        }
++        saveSavedServers(next);
++    }
++
++    private void saveSavedServers(List<String[]> servers) {
++        org.json.JSONArray array = new org.json.JSONArray();
++        try {
++            for (String[] server : servers) {
++                org.json.JSONObject item = new org.json.JSONObject();
++                item.put("host", server[0]);
++                item.put("port", server[1]);
++                array.put(item);
++            }
++            prefs.edit().putString("saved_servers", array.toString()).apply();
++        } catch (org.json.JSONException e) {
++            logger.error("Could not save server list", e);
++        }
+     }
+ 
+     private void onMenu(String label) {
+--- a/dedicated-server/src/test/java/rpg/engine/server/ServerHostPolicyTest.java
++++ b/dedicated-server/src/test/java/rpg/engine/server/ServerHostPolicyTest.java
+@@ -52,6 +52,30 @@
+     }
+ 
+     @Test
++    void portalGuardRequiresLeavingDestinationPortalBeforeReactivation() {
++        ServerHost.PortalGuard guard = new ServerHost.PortalGuard();
++        long now = 1_000_000_000L;
++        assertTrue(guard.shouldActivatePortal(true, now));
++        guard.onTransition(now);
++        assertFalse(guard.canTransition(now + 100_000_000L));
++        assertFalse(guard.shouldActivatePortal(true, now + 1_000_000_000L),
++                "standing inside a destination portal must not immediately retrigger it");
++        assertFalse(guard.shouldActivatePortal(false, now + 1_100_000_000L),
++                "the first frame outside a portal only rearms the guard");
++        assertTrue(guard.shouldActivatePortal(true, now + 1_200_000_000L),
++                "a portal can activate again after leaving and re-entering");
++    }
++
++    @Test
++    void portalGuardAllowsTransitionsAgainAfterCooldown() {
++        ServerHost.PortalGuard guard = new ServerHost.PortalGuard();
++        long now = 2_000_000_000L;
++        guard.onTransition(now);
++        assertFalse(guard.canTransition(now + ServerHost.PortalGuard.COOLDOWN_NANOS - 1));
++        assertTrue(guard.canTransition(now + ServerHost.PortalGuard.COOLDOWN_NANOS));
++    }
++
++    @Test
+     void actionLimiterRejectsInvalidCapacity() {
+         assertThrows(IllegalArgumentException.class, () -> new ServerHost.ActionLimiter(0));
+         assertThrows(IllegalArgumentException.class, () -> new ServerHost.ActionLimiter(-1));
+--- a/docs/status.md
++++ b/docs/status.md
+@@ -25,8 +25,13 @@
+   embedded Lua editor, undo/redo) and a standalone script editor — desktop and Android-native.
+ - Android client: `GameView` guest renderer (floor streamed as `MapPacket`, snapshot sprites,
+   `UiLayout` renderer, scriptable HUD screens), viewport-culling for streamed map tiles, touch
+-  controls with editable/persisted layouts, pinch zoom, tap-to-widget forwarding, a Servers screen
+-  with last-used connection details and local-host-and-join flow, local server, and map editor.
++  controls with editable/persisted layouts, pinch zoom, tap-to-widget forwarding, a scrollable Servers
++  screen with a persisted list of up to eight recent addresses, one-tap connection, local-host-and-join
++  flow, local server, and map editor.
++- Dedicated server ingress protection: bounded concurrent socket readers, a bounded inbound packet
++  queue drained with a per-tick budget, per-client packet rate limits, and rejection of sustained
++  floods or queue overload. Portal arrival requires leaving the destination portal zone before another
++  portal transition can trigger.
+ - `.pak` asset pipeline end-to-end (pack → stream → cache → render).
+ - Unit tests + smoke tests for the engine modules.
+ 
+@@ -58,6 +63,6 @@
+   flow, HUD, toasts, dialogs, and controls still need interactive verification on a real device
+   (CI is SDK-only).
+ - **Region integration verification.** Region catalog loading, deterministic initial-region selection,
+-  portal transitions, destination map delivery, and state migration need end-to-end host testing;
++  portal re-entry protection, destination map delivery, and state migration need end-to-end host testing;
+   migration preserves entity identity but game-specific inventory/quest/progression persistence
+   remains the host's responsibility.
+--- a/docs/0.5.0-release-checklist.md
++++ b/docs/0.5.0-release-checklist.md
+@@ -5,6 +5,7 @@
+ ## Client
+ - [ ] Android tile viewport culling is present and the app no longer freezes after connecting.
+ - [ ] The Android Servers screen appears from the main menu.
++- [ ] Saved server addresses persist across app restarts; connect and remove entries from the list.
+ - [ ] Connect to a server using the last-used address.
+ - [ ] Start a local host and join it from the same device.
+ - [ ] Verify snapshots, movement, camera follow, and streamed map rendering.
+@@ -20,6 +21,9 @@
+ - [ ] Return B → A and confirm entities from different regions are not mixed.
+ - [ ] Invalid portal targets fail catalog loading clearly.
+ - [ ] Lua-driven transitions identify the actual source region and stale cross-region requests are rejected.
++- [ ] Arriving inside a destination portal does not immediately trigger another transition; the player must leave its zone first.
++- [ ] Verify inbound packets are rate-limited, queued within a fixed bound, and drained within a per-tick budget.
++- [ ] Verify excess simultaneous connections and sustained packet floods are rejected without crashing the host.
+ - [ ] Check collision behavior around region boundaries and portals.
+ 
+ ## CI and release

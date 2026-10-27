@@ -28,6 +28,16 @@ public final class ServerHost {
     /** Default snapshot interest radius in world tiles (entities beyond it are not streamed). */
     public static final double DEFAULT_VIEW_RADIUS = 24.0;
     static final int MAX_INPUT_ACTIONS_PER_SECOND = 24;
+    /** Incoming packets accepted per second per client, with a token-bucket burst allowance. */
+    static final int MAX_INBOUND_PACKETS_PER_SECOND = 60;
+    /** Bound concurrent socket readers; excess connections are rejected rather than spawning threads forever. */
+    static final int MAX_CLIENT_CONNECTIONS = 64;
+    /** Global bound on pending client packets. */
+    static final int INBOUND_QUEUE_CAPACITY = 4096;
+    /** Maximum number of queued packets processed during one world tick. */
+    static final int MAX_INBOUND_PACKETS_PER_TICK = 512;
+    static final int MAX_CONSECUTIVE_INBOUND_DROPS = 64;
+    static final int MAX_CONSECUTIVE_QUEUE_OVERFLOWS = 8;
     static final int MAX_NAME_LENGTH = 24;
 
     public record Config(Path map, List<Path> paks, int port, int tickHz, Path dataDir,
@@ -58,6 +68,8 @@ public final class ServerHost {
     /** Canonical (case-insensitive) character name → entity id; guards against duplicate logins. */
     private final Map<String, Long> activeNames = new ConcurrentHashMap<>();
     private final RegionManager regions = new RegionManager();
+    private final BlockingQueue<InboundPacket> inboundPackets = new ArrayBlockingQueue<>(INBOUND_QUEUE_CAPACITY);
+    private volatile int inboundPacketBudget = 240;
     private volatile double playerSpeed = DEFAULT_PLAYER_SPEED;
     private volatile double viewRadius = DEFAULT_VIEW_RADIUS;
     private ExecutorService exec;
@@ -103,6 +115,8 @@ public final class ServerHost {
         if (running) return;
         playerSpeed = cfg.playerSpeed();
         viewRadius = cfg.viewRadius();
+        inboundPackets.clear();
+        inboundPacketBudget = Math.max(64, Math.min(MAX_INBOUND_PACKETS_PER_TICK, cfg.tickHz() * 12));
         regions.clear();
         Path hostDir = cfg.dataDir() == null ? null : cfg.dataDir().resolve("host");
         if (hostDir != null) Files.createDirectories(hostDir);
@@ -160,6 +174,7 @@ public final class ServerHost {
         tick.scheduleAtFixedRate(() -> {
             try {
                 synchronized (worldLock) {
+                    drainInboundPackets(inboundPacketBudget);
                     for (RegionRuntime region : regions.all())
                         region.runtime().setPlayers(playersIn(region.id()));
                     regions.tick(null);
@@ -169,7 +184,12 @@ public final class ServerHost {
         }, 0, tickMs, TimeUnit.MILLISECONDS);
         listener.log("World tick @ " + cfg.tickHz() + " Hz across " + regions.ids().size() + " region(s) (" + tickMs + " ms)");
 
-        exec = Executors.newCachedThreadPool();
+        exec = new ThreadPoolExecutor(0, MAX_CLIENT_CONNECTIONS, 30L, TimeUnit.SECONDS,
+                new SynchronousQueue<>(), runnable -> {
+                    Thread thread = new Thread(runnable, "openrpg-client");
+                    thread.setDaemon(true);
+                    return thread;
+                }, new ThreadPoolExecutor.AbortPolicy());
         server = new ServerSocket(cfg.port());
         server.setReuseAddress(true);
         running = true;
@@ -185,6 +205,7 @@ public final class ServerHost {
         try { if (server != null) server.close(); } catch (IOException ignored) {}
         if (exec != null) exec.shutdownNow();
         if (tick != null) tick.shutdown();
+        inboundPackets.clear();
         synchronized (worldLock) {
             for (Client c : new ArrayList<>(clients.values())) {
                 RegionRuntime region = regions.find(c.regionId).orElse(null);
@@ -201,7 +222,12 @@ public final class ServerHost {
         while (running) {
             try {
                 Socket s = server.accept();
-                exec.submit(() -> client(s));
+                try {
+                    exec.execute(() -> client(s));
+                } catch (RejectedExecutionException full) {
+                    try { s.close(); } catch (IOException ignored) { }
+                    listener.error("Connection rejected: server is at client capacity");
+                }
             } catch (IOException e) {
                 if (running) listener.error("accept error: " + e.getMessage());
             }
@@ -211,28 +237,39 @@ public final class ServerHost {
     private void client(Socket s) {
         Client client = null;
         try (s) {
+            // Do not let silent sockets occupy all bounded client-reader threads forever.
+            s.setSoTimeout(5000);
             InputStream in = s.getInputStream();
             OutputStream out = s.getOutputStream();
             Packet hello = Protocol.read(in);
             if (!(hello instanceof Hello h)) return;
+            s.setSoTimeout(0);
             synchronized (worldLock) { client = spawnPlayer(h.name(), out); }
             if (!pakFiles.isEmpty()) PakStreamer.send(out, pakFiles);
             Protocol.write(out, new Welcome(client.entityId));
             sendFonts(out, fontDir);
             clients.put(client.entityId, client);
             sendMap(client);
+            int rateLimitDrops = 0;
+            int queueOverflowDrops = 0;
             while (running && !s.isClosed()) {
                 Packet q = Protocol.read(in);
-                if (q instanceof Input x) applyInput(client.entityId, x);
-                else if (q instanceof DialogResponse r) {
-                    synchronized (worldLock) {
-                        currentRuntime(client.entityId).respondDialog(r.dialogId(), r.choice());
+                if (!client.inboundPackets.tryAcquire()) {
+                    if (++rateLimitDrops >= MAX_CONSECUTIVE_INBOUND_DROPS) {
+                        listener.error("Disconnecting " + client.name + ": inbound packet rate exceeded");
+                        break;
                     }
-                } else if (q instanceof Cmd c) {
-                    synchronized (worldLock) {
-                        currentRuntime(client.entityId).dispatchCommand(client.entityId, c.code(), c.arg());
-                    }
+                    continue;
                 }
+                rateLimitDrops = 0;
+                if (!inboundPackets.offer(new InboundPacket(client, q))) {
+                    if (++queueOverflowDrops >= MAX_CONSECUTIVE_QUEUE_OVERFLOWS) {
+                        listener.error("Disconnecting " + client.name + ": inbound packet queue is full");
+                        break;
+                    }
+                    continue;
+                }
+                queueOverflowDrops = 0;
             }
         } catch (Exception ignored) {
         } finally {
@@ -336,14 +373,18 @@ public final class ServerHost {
             // region. A transition must not make a queued action accidentally execute in
             // the wrong region on the next tick.
             Optional<MapPortal> portal = regions.portalAt(region.id(), pos);
-            portal.ifPresent(p -> transitionPlayer(entityId, region.id(), p.targetRegion(), p.targetPosition()));
-            broadcastSnapshots();
+            if (c.portalGuard.shouldActivatePortal(portal.isPresent(), System.nanoTime())) {
+                MapPortal p = portal.orElseThrow();
+                transitionPlayer(entityId, region.id(), p.targetRegion(), p.targetPosition());
+            }
         }
     }
 
     private boolean transitionPlayer(long entityId, String expectedSourceRegion, String targetRegion, WorldPosition target) {
         Client c = clients.get(entityId);
         if (c == null) return false;
+        long transitionNow = System.nanoTime();
+        if (!c.portalGuard.canTransition(transitionNow)) return false;
         String from = c.regionId;
         String expected = expectedSourceRegion == null ? null : expectedSourceRegion.trim().toLowerCase(Locale.ROOT);
         // A region's Lua runtime may only move players that currently belong to that
@@ -358,6 +399,7 @@ public final class ServerHost {
         boolean moved = regions.migrate(new EntityId(entityId), from, to, target);
         if (!moved) return false;
         c.regionId = to;
+        c.portalGuard.onTransition(transitionNow);
 
         // Reconstruct only the host-owned session representation needed by the destination world.
         // Inventory/progression/etc. are deliberately untouched; scripts decide how persistent
@@ -371,6 +413,31 @@ public final class ServerHost {
         listener.log("Player " + c.name + " transitioned " + from + " -> " + to);
         return true;
     }
+
+    private void drainInboundPackets(int budget) {
+        for (int i = 0; i < budget; i++) {
+            InboundPacket inbound = inboundPackets.poll();
+            if (inbound == null) return;
+            Client client = inbound.client();
+            // Ignore stale queued packets from a client that has already disconnected.
+            if (client.dismissed || clients.get(client.entityId) != client) continue;
+            try {
+                Packet packet = inbound.packet();
+                if (packet instanceof Input input) {
+                    applyInput(client.entityId, input);
+                } else if (packet instanceof DialogResponse response) {
+                    currentRuntime(client.entityId).respondDialog(response.dialogId(), response.choice());
+                } else if (packet instanceof Cmd command) {
+                    currentRuntime(client.entityId).dispatchCommand(client.entityId, command.code(), command.arg());
+                }
+            } catch (RuntimeException rejected) {
+                listener.error("Rejected packet from " + client.name + ": " +
+                        (rejected.getMessage() == null ? rejected.getClass().getSimpleName() : rejected.getMessage()));
+            }
+        }
+    }
+
+    private record InboundPacket(Client client, Packet packet) {}
 
     private void broadcastSnapshots() {
         Map<String, List<Snapshot.EntityState>> byRegion = new HashMap<>();
@@ -491,12 +558,35 @@ public final class ServerHost {
         }
     }
 
+    static final class PortalGuard {
+        static final long COOLDOWN_NANOS = 500_000_000L;
+        private boolean mustExitPortal;
+        private long cooldownUntilNanos;
+
+        boolean canTransition(long nowNanos) { return nowNanos >= cooldownUntilNanos; }
+
+        boolean shouldActivatePortal(boolean insidePortal, long nowNanos) {
+            if (mustExitPortal) {
+                if (!insidePortal) mustExitPortal = false;
+                return false;
+            }
+            return insidePortal && canTransition(nowNanos);
+        }
+
+        void onTransition(long nowNanos) {
+            mustExitPortal = true;
+            cooldownUntilNanos = nowNanos + COOLDOWN_NANOS;
+        }
+    }
+
     private static final class Client {
         final long entityId;
         final String name;
         volatile String regionId;
         final OutputStream out;
         final ActionLimiter actions = new ActionLimiter(MAX_INPUT_ACTIONS_PER_SECOND);
+        final ActionLimiter inboundPackets = new ActionLimiter(MAX_INBOUND_PACKETS_PER_SECOND);
+        final PortalGuard portalGuard = new PortalGuard();
         volatile long lastInputNanos;
         volatile boolean dismissed;
         Client(long entityId, String name, String regionId, OutputStream out) {
